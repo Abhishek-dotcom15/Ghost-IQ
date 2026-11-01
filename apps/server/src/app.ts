@@ -15,12 +15,14 @@ import {
 import type { PrismaClient } from './db.js';
 import type { Env } from './env.js';
 import { computeFlakinessScore, updateRunningAverage } from './lib/flakiness.js';
+import { describeLlm, type LlmRuntime } from './llm.js';
 import type { AiService } from './services/ai.js';
 
 export interface AppDeps {
   env: Env;
   prisma: PrismaClient;
   ai: AiService;
+  llm: LlmRuntime;
 }
 
 export interface GhostIqApp {
@@ -35,7 +37,7 @@ const DEFAULT_GOAL = 'Explore the page and verify critical actions like login, n
  * Builds the HTTP server, Express app and Socket.IO hub without listening,
  * so tests can drive it with supertest.
  */
-export function createApp({ env, prisma, ai }: AppDeps): GhostIqApp {
+export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
   const corsOrigins = env.GHOSTIQ_CORS_ORIGINS.split(',')
     .map((o) => o.trim())
     .filter(Boolean);
@@ -229,7 +231,17 @@ export function createApp({ env, prisma, ai }: AppDeps): GhostIqApp {
 
   // ------------------------------------------------------------------- REST
   app.get('/healthz', (_req, res) => {
-    res.json({ ok: true, llm: ai.describe() });
+    res.json({ ok: true, llm: describeLlm(llm) });
+  });
+
+  /** LLM configuration, last health check and spend (all time and last 24 hours). */
+  app.get('/api/llm/status', async (_req, res) => {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const [allTime, last24h] = await Promise.all([
+      llmUsage(prisma, {}),
+      llmUsage(prisma, { createdAt: { gte: since } }),
+    ]);
+    res.json({ ...describeLlm(llm), usage: { allTime, last24h } });
   });
 
   app.get('/api/projects', async (_req, res) => {
@@ -276,7 +288,7 @@ export function createApp({ env, prisma, ai }: AppDeps): GhostIqApp {
       res.status(404).json({ error: 'Session not found' });
       return;
     }
-    res.json(session);
+    res.json({ ...session, llmUsage: await llmUsage(prisma, { sessionId: session.id }) });
   });
 
   app.post('/api/sessions', async (req, res) => {
@@ -320,25 +332,27 @@ export function createApp({ env, prisma, ai }: AppDeps): GhostIqApp {
 
   // Called by the runner. Unauthenticated until Phase 7 (API keys).
   app.post('/api/ai/plan-step', async (req, res) => {
-    const { htmlSnapshot, currentUrl, history, goal, persona } = req.body ?? {};
-    const next = await ai.planNextAction(
-      String(htmlSnapshot ?? ''),
-      String(currentUrl ?? ''),
-      Array.isArray(history) ? history : [],
-      String(goal ?? ''),
-      String(persona ?? ''),
-    );
+    const { sessionId, htmlSnapshot, currentUrl, history, goal, persona } = req.body ?? {};
+    const next = await ai.planNextAction({
+      sessionId: typeof sessionId === 'string' ? sessionId : undefined,
+      htmlSnapshot: String(htmlSnapshot ?? ''),
+      currentUrl: String(currentUrl ?? ''),
+      history: Array.isArray(history) ? history : [],
+      goal: String(goal ?? ''),
+      persona: String(persona ?? ''),
+    });
     res.json(next);
   });
 
   app.post('/api/ai/heal-selector', async (req, res) => {
-    const { failedSelector, htmlSnapshot, goal, persona } = req.body ?? {};
-    const healed = await ai.healSelector(
-      String(failedSelector ?? ''),
-      String(htmlSnapshot ?? ''),
-      String(goal ?? ''),
-      String(persona ?? ''),
-    );
+    const { sessionId, failedSelector, htmlSnapshot, goal, persona } = req.body ?? {};
+    const healed = await ai.healSelector({
+      sessionId: typeof sessionId === 'string' ? sessionId : undefined,
+      failedSelector: String(failedSelector ?? ''),
+      htmlSnapshot: String(htmlSnapshot ?? ''),
+      goal: String(goal ?? ''),
+      persona: String(persona ?? ''),
+    });
     res.json(healed);
   });
 
@@ -432,6 +446,35 @@ export function createApp({ env, prisma, ai }: AppDeps): GhostIqApp {
   });
 
   return { app, server, io };
+}
+
+/** Aggregated LLM spend for a set of calls. `costUsd` excludes calls to unpriced models. */
+export async function llmUsage(
+  prisma: PrismaClient,
+  where: { sessionId?: string; createdAt?: { gte: Date } },
+) {
+  const [totals, failedCalls, fallbackCalls, cacheHits, unpricedCalls] = await Promise.all([
+    prisma.llmCall.aggregate({
+      where,
+      _count: { _all: true },
+      _sum: { tokensIn: true, tokensOut: true, costUsd: true, latencyMs: true },
+    }),
+    prisma.llmCall.count({ where: { ...where, ok: false } }),
+    prisma.llmCall.count({ where: { ...where, fallbackUsed: true } }),
+    prisma.llmCall.count({ where: { ...where, cacheHit: true } }),
+    prisma.llmCall.count({ where: { ...where, costUsd: null } }),
+  ]);
+  return {
+    calls: totals._count._all,
+    failedCalls,
+    fallbackCalls,
+    cacheHits,
+    unpricedCalls,
+    tokensIn: totals._sum.tokensIn ?? 0,
+    tokensOut: totals._sum.tokensOut ?? 0,
+    costUsd: totals._sum.costUsd ?? 0,
+    latencyMs: totals._sum.latencyMs ?? 0,
+  };
 }
 
 function logInvalid(event: string, error: { issues: unknown[] }) {

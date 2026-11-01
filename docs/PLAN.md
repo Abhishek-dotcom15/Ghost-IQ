@@ -1,6 +1,6 @@
 # GhostIQ — Build Plan (v2)
 
-Status: Phase 0 complete (v0.2.0). Next: Phase 1. Last updated: 2026-11-01.
+Status: Phases 0-1 complete (v0.3.0). Next: Phase 2 (agent core). Last updated: 2026-11-01.
 Source idea: `GhostIQ_Project_Blueprint.pdf`. This document records where the code
 really stands, what changed in the research, and the phase plan we will execute.
 

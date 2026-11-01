@@ -6,13 +6,13 @@ import {
   Users,
   Settings,
   Plus,
-  Sparkles,
   Terminal,
 } from 'lucide-react';
 import DashboardView from './components/DashboardView';
 import SessionsView from './components/SessionsView';
 import EndpointsView from './components/EndpointsView';
 import PersonaBuilder from './components/PersonaBuilder';
+import LlmStatusPanel from './components/LlmStatusPanel';
 import { io } from 'socket.io-client';
 
 export interface Project {
@@ -39,7 +39,6 @@ export default function App() {
   >('dashboard');
   const [newProjectName, setNewProjectName] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
-  const [geminiApiKey, setGeminiApiKey] = useState(localStorage.getItem('GEMINI_API_KEY') || '');
 
   // Load Projects
   const fetchProjects = async () => {
@@ -104,13 +103,6 @@ export default function App() {
     } catch (err) {
       console.error('Failed to create project:', err);
     }
-  };
-
-  const handleSaveApiKey = () => {
-    localStorage.setItem('GEMINI_API_KEY', geminiApiKey);
-    alert(
-      'API Key saved successfully! The central server service can read it from .env or your dashboard settings.',
-    );
   };
 
   return (
@@ -375,54 +367,7 @@ export default function App() {
             )}
             {currentView === 'endpoints' && <EndpointsView project={selectedProject} />}
             {currentView === 'personas' && <PersonaBuilder />}
-            {currentView === 'settings' && (
-              <div
-                className="glass-card"
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '1.5rem',
-                  maxWidth: '600px',
-                }}
-              >
-                <h3
-                  style={{
-                    fontFamily: 'var(--font-title)',
-                    fontSize: '1.25rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem',
-                  }}
-                >
-                  <Sparkles size={18} style={{ color: 'hsl(var(--accent-purple))' }} /> AI
-                  Configuration
-                </h3>
-                <p style={{ fontSize: '0.9rem', color: 'hsl(var(--text-muted))' }}>
-                  Set your Google Gemini API key to enable autonomous test planning and unhandled
-                  visual bug diagnostics.
-                </p>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>Gemini API Key</label>
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <input
-                      type="password"
-                      placeholder="AIzaSy..."
-                      value={geminiApiKey}
-                      onChange={(e) => setGeminiApiKey(e.target.value)}
-                      style={{ flex: 1 }}
-                    />
-                    <button onClick={handleSaveApiKey} className="btn btn-primary">
-                      Save Key
-                    </button>
-                  </div>
-                  <span style={{ fontSize: '0.75rem', color: 'hsl(var(--text-muted))' }}>
-                    Note: For convenience, you can also store this directly in the backend{' '}
-                    <code style={{ fontFamily: 'var(--font-mono)' }}>.env</code> file under the
-                    variable <code style={{ fontFamily: 'var(--font-mono)' }}>GEMINI_API_KEY</code>.
-                  </span>
-                </div>
-              </div>
-            )}
+            {currentView === 'settings' && <LlmStatusPanel />}
           </>
         )}
       </main>

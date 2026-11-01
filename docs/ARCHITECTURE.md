@@ -10,7 +10,7 @@ flowchart LR
   subgraph CP["Control plane (apps/server)"]
     API[REST API<br/>Express 5]
     WS[Socket.IO hub]
-    AI[AI service<br/>Gemini / demo mode]
+    AI[AI service<br/>packages/llm]
     DB[(SQLite via Prisma 7<br/>Postgres in Phase 7)]
     FS[(Screenshots)]
   end
@@ -38,13 +38,14 @@ a server, without opening inbound ports to the app under test.
 
 ## Packages
 
-| Path                       | Role                                                                                                                                                         |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `packages/shared`          | zod schemas for every socket event plus shared helpers. Both server and runner validate against it, so a payload change is a compile error on both sides.    |
-| `apps/server`              | REST API, Socket.IO hub, persistence, AI orchestration. `createApp()` builds everything without listening, which is what the integration tests use.          |
-| `apps/runner`              | CLI (`ghostiq-agent`) that registers with the server and executes runs in Chromium.                                                                          |
-| `apps/dashboard`           | React UI. Uses relative URLs; Vite proxies them in dev and the server serves the built files in production, so there is one origin and no URL configuration. |
-| `examples/mock-target-app` | Demo target with deliberately seeded bugs; becomes the benchmark app in Phase 4.                                                                             |
+| Path                       | Role                                                                                                                                                                                                                                                  |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/llm`             | Provider-agnostic LLM client. Thin adapters (Gemini, Claude, OpenAI-compatible/Ollama, mock) behind one core that owns schema validation + one repair retry, backoff retries, timeouts, the fallback chain, caching, cost metering and record/replay. |
+| `packages/shared`          | zod schemas for every socket event plus shared helpers. Both server and runner validate against it, so a payload change is a compile error on both sides.                                                                                             |
+| `apps/server`              | REST API, Socket.IO hub, persistence, AI orchestration. `createApp()` builds everything without listening, which is what the integration tests use.                                                                                                   |
+| `apps/runner`              | CLI (`ghostiq-agent`) that registers with the server and executes runs in Chromium.                                                                                                                                                                   |
+| `apps/dashboard`           | React UI. Uses relative URLs; Vite proxies them in dev and the server serves the built files in production, so there is one origin and no URL configuration.                                                                                          |
+| `examples/mock-target-app` | Demo target with deliberately seeded bugs; becomes the benchmark app in Phase 4.                                                                                                                                                                      |
 
 ## Run lifecycle (current protocol)
 
@@ -60,9 +61,13 @@ Phase 2 replaces step 2 with the agent core (Playwright `ariaSnapshot({ mode: 'a
 All configuration is environment variables, validated at startup by `apps/server/src/env.ts`.
 See `apps/server/.env.example` and `apps/runner/.env.example`. No model ID is hard-coded.
 
+## LLM calls
+
+Every provider call (initial, retry, repair or cache hit) is written to the `LlmCall` table with provider, model, tokens, latency, estimated cost and outcome. `GET /api/llm/status` aggregates spend (all time and last 24 h) and `GET /api/sessions/:id` includes `llmUsage` for the run. At boot the server makes one tiny real call; a retired model or bad key prints an actionable message (and exits when `GHOSTIQ_LLM_STRICT=true`).
+
 ## Known limitations (tracked in `docs/PLAN.md`)
 
 - No authentication yet: anyone who can reach the server can drive a runner (Phase 7).
 - Events are broadcast to every dashboard (Phase 7: per-project rooms).
 - The runner stops a run at the first failing step instead of recording a finding and continuing (Phase 2).
-- Without an LLM key, planning comes from a scripted demo engine, labelled `[demo]` everywhere (Phase 1 adds real providers and a deterministic test double).
+- Without an LLM key, planning comes from the scripted demo responder (a mock provider), labelled `[demo]` everywhere. It exercises the same LLM pipeline as a real model.

@@ -33,8 +33,33 @@ model TestSession {
   startedAt      DateTime   @default(now())
   endedAt        DateTime?
   steps          TestStep[]
+  llmCalls       LlmCall[]
 
   @@index([projectId, startedAt])
+}
+
+/// One physical LLM provider call (including retries, repairs and cache hits).
+model LlmCall {
+  id           String       @id @default(uuid())
+  sessionId    String?
+  session      TestSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  purpose      String // plan-step, heal-selector, diagnostics, health-check
+  provider     String
+  model        String
+  attempt      String // initial, retry, repair
+  ok           Boolean
+  errorKind    String?
+  errorMessage String?
+  tokensIn     Int
+  tokensOut    Int
+  latencyMs    Int
+  costUsd      Float? // null when the model has no known price
+  cacheHit     Boolean
+  fallbackUsed Boolean
+  createdAt    DateTime     @default(now())
+
+  @@index([sessionId])
+  @@index([createdAt])
 }
 
 model TestStep {

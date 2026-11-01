@@ -88,7 +88,12 @@ async function main() {
   for (const s of session.steps) console.log(`  ${s.stepNumber}. [${s.status}] ${s.description}`);
 
   assert(session.status === 'PASSED', `expected PASSED, got ${session.status}`);
-  assert(session.steps.length >= 2, 'expected at least two recorded steps');
+  assert(session.steps.length >= 4, 'expected navigation + email + password + submit steps');
+  assert(
+    session.steps.some((s) => s.action === 'TYPE' && s.value === 'testuser@ghostiq.io'),
+    'the email field was filled',
+  );
+  assert(session.llmUsage?.calls >= 4, 'planner LLM calls were recorded for the run');
   const shot = session.steps[0].screenshotPath;
   assert(shot, 'first step has a screenshot');
   assert((await fetch(`${SERVER}${shot}`)).ok, 'screenshot is served');

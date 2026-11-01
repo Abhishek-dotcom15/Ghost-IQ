@@ -12,6 +12,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import type { Socket } from 'socket.io-client';
+import { formatUsd } from '../lib/format';
 
 interface SessionsViewProps {
   project: Project;
@@ -44,6 +45,15 @@ interface SessionDetail {
   startedAt: string;
   endedAt?: string;
   steps: TestStep[];
+  /** Present on sessions fetched from the API (not on live socket updates). */
+  llmUsage?: {
+    calls: number;
+    failedCalls: number;
+    fallbackCalls: number;
+    tokensIn: number;
+    tokensOut: number;
+    costUsd: number;
+  };
 }
 
 export default function SessionsView({ project, socket }: SessionsViewProps) {
@@ -521,6 +531,18 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                     <span>Flakiness Index</span>
                     <strong style={{ color: 'hsl(var(--danger))', marginTop: '0.1rem' }}>
                       {Math.round(sessionDetail.flakinessScore)}%
+                    </strong>
+                  </div>
+                )}
+                {sessionDetail.llmUsage && sessionDetail.llmUsage.calls > 0 && (
+                  <div
+                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}
+                    title={`${sessionDetail.llmUsage.calls} calls, ${sessionDetail.llmUsage.tokensIn.toLocaleString()} tokens in / ${sessionDetail.llmUsage.tokensOut.toLocaleString()} out, ${sessionDetail.llmUsage.failedCalls} failed, ${sessionDetail.llmUsage.fallbackCalls} via fallback`}
+                  >
+                    <span>AI cost</span>
+                    <strong style={{ color: '#fff', marginTop: '0.1rem' }}>
+                      {formatUsd(sessionDetail.llmUsage.costUsd)} · {sessionDetail.llmUsage.calls}{' '}
+                      calls
                     </strong>
                   </div>
                 )}

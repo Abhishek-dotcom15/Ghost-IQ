@@ -14,9 +14,14 @@ services:
     ports:
       - '3001:3001'
     environment:
-      GHOSTIQ_LLM_PROVIDER: ${GHOSTIQ_LLM_PROVIDER:-gemini}
-      GHOSTIQ_LLM_MODEL: ${GHOSTIQ_LLM_MODEL:-gemini-3.5-flash-lite}
+      # Empty values mean "not set": no key => demo mode, Gemini key => Gemini.
+      GHOSTIQ_LLM_PROVIDER: ${GHOSTIQ_LLM_PROVIDER:-}
+      GHOSTIQ_LLM_MODEL: ${GHOSTIQ_LLM_MODEL:-}
       GHOSTIQ_LLM_API_KEY: ${GHOSTIQ_LLM_API_KEY:-}
+      GHOSTIQ_LLM_FALLBACK: ${GHOSTIQ_LLM_FALLBACK:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       - ghostiq-data:/data
     restart: unless-stopped

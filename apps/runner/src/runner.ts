@@ -8,6 +8,12 @@ import { SocketEvents, type NetworkRequestRecord, type RunTestCommand } from '@g
  * Phase 2 replaces it with the agent core (aria snapshots, closed action schema,
  * budgets, guardrails, findings instead of aborting on the first error).
  */
+/**
+ * A heal below this confidence fails the step instead of silently "passing" it.
+ * (The prototype accepted 0.4.) Phase 5 adds the full heal ladder and approval queue.
+ */
+export const MIN_HEAL_CONFIDENCE = 0.85;
+
 export class PlaywrightRunner {
   private readonly socket: Socket;
   private readonly serverUrl: string;
@@ -311,6 +317,7 @@ export class PlaywrightRunner {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                  sessionId,
                   failedSelector: activeSelector,
                   htmlSnapshot: DOMSnapshot,
                   goal,
@@ -322,7 +329,7 @@ export class PlaywrightRunner {
               if (
                 healingResult.healedSelector &&
                 healingResult.healedSelector !== activeSelector &&
-                healingResult.confidence > 0.4
+                healingResult.confidence >= MIN_HEAL_CONFIDENCE
               ) {
                 console.log(
                   `🟢 Self-Healing Success! Replaced "${activeSelector}" -> "${healingResult.healedSelector}" (Confidence: ${Math.round(healingResult.confidence * 100)}%)`,

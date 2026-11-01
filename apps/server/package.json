@@ -17,8 +17,8 @@
     "db:setup": "prisma generate && prisma db push && tsx src/seed.ts"
   },
   "dependencies": {
+    "@ghostiq/llm": "workspace:*",
     "@ghostiq/shared": "workspace:*",
-    "@google/genai": "^2.30.0",
     "@prisma/adapter-better-sqlite3": "^7.10.1",
     "@prisma/client": "^7.10.1",
     "cors": "^2.8.6",
