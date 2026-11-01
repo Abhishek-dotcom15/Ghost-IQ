@@ -1,0 +1,75 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:../dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Project {
+  id             String           @id @default(uuid())
+  name           String
+  createdAt      DateTime         @default(now())
+  githubRepo     String?
+  githubPrNumber Int?
+  sessions       TestSession[]
+  endpoints      EndpointHealth[]
+}
+
+model TestSession {
+  id             String     @id @default(uuid())
+  projectId      String
+  project        Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name           String
+  targetUrl      String
+  persona        String
+  status         String     // PENDING, RUNNING, PASSED, FAILED
+  isBaseline     Boolean    @default(false)
+  flakinessScore Float      @default(0.0)
+  startedAt      DateTime   @default(now())
+  endedAt        DateTime?
+  steps          TestStep[]
+}
+
+model TestStep {
+  id             String           @id @default(uuid())
+  sessionId      String
+  session        TestSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  stepNumber     Int
+  action         String           // GOTO, CLICK, TYPE, ASSERTION, ERROR
+  description    String
+  selector       String?
+  value          String?
+  status         String           // PASSED, FAILED
+  error          String?
+  screenshotPath String?
+  a11yViolations String?          // JSON list of a11y violations found
+  timestamp      DateTime         @default(now())
+  networkLogs    NetworkRequest[]
+}
+
+model NetworkRequest {
+  id        String   @id @default(uuid())
+  stepId    String
+  step      TestStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  url       String
+  method    String
+  status    Int
+  latencyMs Int
+  timestamp DateTime @default(now())
+}
+
+model EndpointHealth {
+  id           String   @id @default(uuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  url          String
+  method       String
+  callCount    Int      @default(0)
+  errorCount   Int      @default(0)
+  avgLatencyMs Float    @default(0.0)
+  lastCalled   DateTime @default(now())
+
+  @@unique([projectId, url, method])
+}
