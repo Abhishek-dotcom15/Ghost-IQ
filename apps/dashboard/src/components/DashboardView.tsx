@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { Project } from '../App';
 import { PlayCircle, ShieldAlert, CheckCircle, Database, Network } from 'lucide-react';
+import { fetchPersonas, type PersonaView } from '../lib/personas';
 
 interface DashboardViewProps {
   project: Project;
@@ -9,8 +10,25 @@ interface DashboardViewProps {
 
 export default function DashboardView({ project, refresh }: DashboardViewProps) {
   const [targetUrl, setTargetUrl] = useState('http://localhost:3000');
-  const [persona, setPersona] = useState('Happy Path User');
+  const [personas, setPersonas] = useState<PersonaView[]>([]);
+  const [personaId, setPersonaId] = useState('happy-path');
+  const [seed, setSeed] = useState('');
+  const [consent, setConsent] = useState(false);
   const [goal, setGoal] = useState('Sign in with valid credentials and reach the dashboard.');
+  const selectedPersona = personas.find((p) => p.id === personaId);
+
+  useEffect(() => {
+    fetchPersonas()
+      .then(setPersonas)
+      .catch((err: Error) => setErrorMsg(err.message));
+  }, []);
+
+  const choosePersona = (id: string) => {
+    setPersonaId(id);
+    setConsent(false);
+    const goalOfPersona = personas.find((p) => p.id === id)?.spec.goals[0];
+    if (goalOfPersona) setGoal(goalOfPersona);
+  };
   const [maxSteps, setMaxSteps] = useState(30);
   const [allowDestructive, setAllowDestructive] = useState(false);
   const [triggering, setTriggering] = useState(false);
@@ -60,10 +78,12 @@ export default function DashboardView({ project, refresh }: DashboardViewProps) 
         body: JSON.stringify({
           projectId: project.id,
           targetUrl,
-          persona,
+          personaId,
           goal,
           budgets: { maxSteps },
           allowDestructive,
+          ...(seed.trim() ? { seed: Number(seed) } : {}),
+          ...(selectedPersona?.spec.requires_consent ? { consent } : {}),
         }),
       });
 
@@ -265,19 +285,41 @@ export default function DashboardView({ project, refresh }: DashboardViewProps) 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.2rem' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                 <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>Testing Persona</label>
-                <select value={persona} onChange={(e) => setPersona(e.target.value)}>
-                  <option value="Happy Path User">
-                    Happy Path User (Methodical & standard validation)
-                  </option>
-                  <option value="Chaotic Explorer">
-                    Chaotic Explorer (Aggressive clicks & random flows)
-                  </option>
-                  <option value="Form Stress Tester">
-                    Form Stress Tester (Empty & invalid form validation checks)
-                  </option>
+                <select value={personaId} onChange={(e) => choosePersona(e.target.value)}>
+                  {personas.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                      {p.source === 'custom' ? ' (custom)' : ''}
+                    </option>
+                  ))}
                 </select>
+                {selectedPersona && (
+                  <span style={{ fontSize: '0.75rem', color: 'hsl(var(--text-muted))' }}>
+                    {selectedPersona.description}
+                  </span>
+                )}
               </div>
             </div>
+
+            {selectedPersona?.spec.requires_consent && (
+              <label
+                style={{
+                  fontSize: '0.8rem',
+                  display: 'flex',
+                  gap: '0.5rem',
+                  alignItems: 'flex-start',
+                  color: 'hsl(var(--warning))',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={consent}
+                  onChange={(e) => setConsent(e.target.checked)}
+                />
+                I own this application or am authorised to run security hygiene checks against{' '}
+                {targetUrl}.
+              </label>
+            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
               <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>Autonomous Testing Goal</label>
@@ -322,6 +364,20 @@ export default function DashboardView({ project, refresh }: DashboardViewProps) 
                   onChange={(e) => setAllowDestructive(e.target.checked)}
                 />
                 Allow destructive actions (delete, pay, purchase)
+              </label>
+              <label
+                style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                title="Same persona + same seed = same generated inputs, pacing and behaviors. Leave empty for the persona's own seed."
+              >
+                Seed
+                <input
+                  type="number"
+                  min={0}
+                  value={seed}
+                  placeholder={selectedPersona ? String(selectedPersona.spec.seed) : ''}
+                  onChange={(e) => setSeed(e.target.value)}
+                  style={{ width: '6rem' }}
+                />
               </label>
             </div>
 

@@ -3,6 +3,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { chromium } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { resolveDevice, resolveNetwork } from '@ghostiq/personas';
 import { PlaywrightDriver } from './driver.js';
 
 // Real-browser test of the guardrails and evidence capture. Skipped where Chromium is not
@@ -95,6 +96,76 @@ describe.skipIf(!hasBrowser)('PlaywrightDriver', () => {
       const about = [...fresh.elements.values()].find((e) => e.name === 'About')!;
       await driver.execute({ type: 'click', ref: about.ref, reason: 'explore' });
       expect(driver.url()).toBe(`${origin}/about`);
+    } finally {
+      await driver.close();
+    }
+  }, 60_000);
+
+  it('applies persona device, network, typing speed, reload, history and offline', async () => {
+    const driver = await PlaywrightDriver.launch({
+      allowedOrigins: [origin],
+      headless: true,
+      trace: false,
+      device: resolveDevice('iphone-13'),
+      network: resolveNetwork('fast-3g'),
+      typingDelayMs: 5,
+    });
+    try {
+      await driver.open(`${origin}/`);
+      const { screenshotBase64 } = await driver.collect();
+      // PNG width lives in bytes 16-19 of the header: 390 CSS px x DPR 3.
+      expect(Buffer.from(screenshotBase64!, 'base64').readUInt32BE(16)).toBe(1170);
+
+      const search = [...(await driver.observe()).elements.values()].find(
+        (e) => e.name === 'Search',
+      )!;
+      await driver.execute({
+        type: 'fill',
+        ref: search.ref,
+        text: 'zoë 👻',
+        reason: 'type slowly',
+      });
+      expect((await driver.observe()).snapshot).toContain('zoë 👻');
+
+      await driver.execute({ type: 'reload', reason: 'refresh' });
+      await driver.execute({ type: 'navigate', path: '/about', reason: 'go' });
+      await driver.execute({ type: 'goBack', reason: 'back' });
+      expect(driver.url()).toBe(`${origin}/`);
+      await driver.execute({ type: 'goForward', reason: 'forward' });
+      expect(driver.url()).toBe(`${origin}/about`);
+
+      await driver.execute({ type: 'navigate', path: '/', reason: 'home' });
+      await driver.collect();
+      const button = [...(await driver.observe()).elements.values()].find(
+        (e) => e.name === 'Load stock',
+      )!;
+
+      await driver.setOffline(true);
+      await driver.execute({ type: 'click', ref: button.ref, reason: 'while offline' });
+      await driver.execute({ type: 'wait', ms: 300, reason: 'settle' });
+      const offline = await driver.collect();
+      // The failed request, plus the app's own unhandled "Failed to fetch": both are evidence.
+      expect(offline.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'request_failed',
+            message: expect.stringContaining('INTERNET_DISCONNECTED'),
+          }),
+          expect.objectContaining({
+            kind: 'page_error',
+            message: expect.stringContaining('Failed to fetch'),
+          }),
+        ]),
+      );
+
+      await driver.setOffline(false);
+      await driver.execute({ type: 'click', ref: button.ref, reason: 'back online' });
+      await driver.execute({ type: 'wait', ms: 1500, reason: 'settle (3G latency)' });
+      const online = await driver.collect();
+      expect(online.issues).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: 'http_error', status: 500 })]),
+      );
+      expect(online.issues.some((i) => i.kind === 'request_failed')).toBe(false);
     } finally {
       await driver.close();
     }

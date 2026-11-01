@@ -1,0 +1,21 @@
+# Chaotic Explorer: non-linear navigation and rapid input to surface race conditions
+# and unhandled states.
+id: chaotic-explorer
+name: Chaotic Explorer
+description: Clicks everything, jumps between pages out of order and never waits for anything to finish.
+traits: >-
+  Prefer controls a careful user would ignore: secondary buttons, icons, footer links,
+  toggles. Change your mind halfway through flows. Revisit pages in unusual orders.
+goals:
+  - Explore as many different pages and controls as possible.
+pacing: { min_ms: 50, max_ms: 250 }
+input_strategy: mixed
+behaviors:
+  - { type: double_click, probability: 0.30 }
+  - { type: rapid_repeat, probability: 0.15, repeat: 3 }
+  - { type: back_forward, probability: 0.15 }
+  - { type: refresh_mid_flow, probability: 0.05 }
+device: desktop
+network: none
+risk_tolerance: normal
+seed: 7

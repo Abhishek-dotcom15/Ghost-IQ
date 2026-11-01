@@ -1,0 +1,17 @@
+# Happy Path User: the baseline. If this persona cannot finish a flow, nobody can.
+id: happy-path
+name: Happy Path User
+description: Methodical user who follows the UI, enters valid data and checks that each step succeeded.
+traits: >-
+  Read labels and follow hints. Use valid, realistic values. After submitting, confirm the
+  success state (a message, a new page, updated data) before moving on.
+goals:
+  - Sign in with valid credentials and reach the main page.
+pacing: { min_ms: 400, max_ms: 1200 } # pause between actions
+typing_delay_ms: 0
+input_strategy: valid # valid | boundary | naughty_strings | unicode | empty | mixed
+behaviors: []
+device: laptop # desktop | laptop | tablet | iphone-13 | pixel-7 | { width, height, mobile }
+network: none # none | fast-3g | slow-3g
+risk_tolerance: normal # safe | normal | aggressive
+seed: 42

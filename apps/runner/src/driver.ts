@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import type { BrowserDriver, Observation, StepSignals } from '@ghostiq/core';
+import type { NetworkConditions, ResolvedDevice } from '@ghostiq/personas';
 import {
   isAllowedUrl,
   parseAriaSnapshot,
@@ -7,7 +8,14 @@ import {
   type NetworkRequestRecord,
   type StepIssue,
 } from '@ghostiq/shared';
-import { chromium, type Browser, type BrowserContext, type Page, type Request } from 'playwright';
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type CDPSession,
+  type Page,
+  type Request,
+} from 'playwright';
 
 export interface DriverOptions {
   allowedOrigins: string[];
@@ -16,7 +24,12 @@ export interface DriverOptions {
   storageStatePath?: string;
   trace: boolean;
   actionTimeoutMs?: number;
-  viewport?: { width: number; height: number };
+  /** Persona device: viewport, touch, user agent. Defaults to a 1280x720 laptop. */
+  device?: ResolvedDevice;
+  /** Persona network throttling (Chromium only); null for no throttling. */
+  network?: NetworkConditions | null;
+  /** Per-keystroke delay when typing; 0 fills instantly. */
+  typingDelayMs?: number;
 }
 
 const NAVIGATION_TIMEOUT_MS = 20_000;
@@ -35,6 +48,8 @@ export class PlaywrightDriver implements BrowserDriver {
     private readonly context: BrowserContext,
     private readonly page: Page,
     private readonly options: DriverOptions,
+    /** Present when the persona throttles the network; it owns Chromium's network state. */
+    private readonly cdp?: CDPSession,
   ) {}
 
   static async launch(options: DriverOptions): Promise<PlaywrightDriver> {
@@ -48,16 +63,27 @@ export class PlaywrightDriver implements BrowserDriver {
         `storageState file not found: ${options.storageStatePath} (continuing logged out)`,
       );
     }
+    const device = options.device;
     const context = await browser.newContext({
-      viewport: options.viewport ?? { width: 1280, height: 720 },
+      viewport: device?.viewport ?? { width: 1280, height: 720 },
+      isMobile: device?.isMobile ?? false,
+      hasTouch: device?.hasTouch ?? false,
+      deviceScaleFactor: device?.deviceScaleFactor ?? 1,
+      ...(device?.userAgent ? { userAgent: device.userAgent } : {}),
       storageState,
     });
     if (options.trace) await context.tracing.start({ screenshots: true, snapshots: true });
     const page = await context.newPage();
+    let cdp: CDPSession | undefined;
+    if (options.network) {
+      // Chromium DevTools protocol: the same throttling as DevTools' 3G presets.
+      cdp = await context.newCDPSession(page);
+      await cdp.send('Network.emulateNetworkConditions', { offline: false, ...options.network });
+    }
     page.setDefaultTimeout(options.actionTimeoutMs ?? 5_000);
     page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
 
-    const driver = new PlaywrightDriver(browser, context, page, options);
+    const driver = new PlaywrightDriver(browser, context, page, options, cdp);
     await driver.installGuards();
     driver.installListeners();
     return driver;
@@ -208,9 +234,16 @@ export class PlaywrightDriver implements BrowserDriver {
       case 'click':
         await page.getByRef(action.ref).click();
         break;
-      case 'fill':
-        await page.getByRef(action.ref).fill(action.text);
+      case 'fill': {
+        const field = page.getByRef(action.ref);
+        if (this.options.typingDelayMs) {
+          await field.clear();
+          await field.pressSequentially(action.text, { delay: this.options.typingDelayMs });
+        } else {
+          await field.fill(action.text);
+        }
         break;
+      }
       case 'select':
         await page.getByRef(action.ref).selectOption(action.option);
         break;
@@ -225,6 +258,12 @@ export class PlaywrightDriver implements BrowserDriver {
         break;
       case 'goBack':
         await page.goBack({ waitUntil: 'domcontentloaded' });
+        break;
+      case 'goForward':
+        await page.goForward({ waitUntil: 'domcontentloaded' });
+        break;
+      case 'reload':
+        await page.reload({ waitUntil: 'domcontentloaded' });
         break;
       case 'navigate':
         // The core already checked the allowlist; the route guard is the second line of defence.
@@ -265,6 +304,14 @@ export class PlaywrightDriver implements BrowserDriver {
         .catch(() => undefined),
     ]);
     return { network, issues, a11yViolations: a11y, screenshotBase64: screenshot };
+  }
+
+  async setOffline(offline: boolean): Promise<void> {
+    await this.context.setOffline(offline);
+    // Throttling and offline share one DevTools setting; re-send it so neither overrides the other.
+    if (this.cdp && this.options.network) {
+      await this.cdp.send('Network.emulateNetworkConditions', { offline, ...this.options.network });
+    }
   }
 
   /** Writes the Playwright trace to `path` (no-op when tracing is off). */

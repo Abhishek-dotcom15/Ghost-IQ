@@ -26,7 +26,11 @@ model TestSession {
   project        Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
   name           String
   targetUrl      String
+  /// Persona display name (kept for history even if the persona is later deleted).
   persona        String
+  personaId      String?
+  /// Seed for generated inputs, pacing and behaviors: same persona + seed = same choices.
+  seed           Int?
   status         String // PENDING, RUNNING, PASSED, FAILED, CANCELLED
   goal           String?
   /// RunConfig JSON: budgets, allowed origins, destructive-action permission.
@@ -44,6 +48,18 @@ model TestSession {
   llmCalls       LlmCall[]
 
   @@index([projectId, startedAt])
+}
+
+/// A custom persona created in the dashboard. Built-in and file-based personas are not stored here.
+model Persona {
+  id          String   @id
+  name        String
+  description String
+  /// The YAML source as written by the user (validated against PersonaSpec on save).
+  yaml        String
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 /// One physical LLM provider call (including retries, repairs and cache hits).
@@ -94,6 +110,8 @@ model TestStep {
   observationHash String?
   /// StepIssue[] JSON: console/page errors, failed requests, blocked actions. Never fatal.
   issuesJson      String?
+  /// Persona behavior that injected this step (double_click, refresh_mid_flow, ...), if any.
+  behavior        String?
   timestamp       DateTime         @default(now())
   networkLogs     NetworkRequest[]
 

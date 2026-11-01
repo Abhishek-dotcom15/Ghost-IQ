@@ -1,0 +1,21 @@
+# Impatient User: duplicate submissions, refreshes and back/forward mid-flow.
+# Finds idempotency bugs (double orders, duplicate records) and lost state.
+id: impatient-user
+name: Impatient User
+description: Rushes through flows, double-clicks, refreshes and goes back mid-way.
+traits: >-
+  Go straight for the primary action of each page. Do not wait for spinners. If something
+  seems slow, click it again or refresh.
+goals:
+  - Complete the main sign-up, sign-in or purchase flow as fast as possible.
+pacing: { min_ms: 80, max_ms: 300 }
+input_strategy: valid
+behaviors:
+  - { type: double_click, probability: 0.30 }
+  - { type: refresh_mid_flow, probability: 0.10 }
+  - { type: back_forward, probability: 0.10 }
+  - { type: rapid_repeat, probability: 0.20, repeat: 3 }
+device: laptop
+network: fast-3g
+risk_tolerance: normal
+seed: 42

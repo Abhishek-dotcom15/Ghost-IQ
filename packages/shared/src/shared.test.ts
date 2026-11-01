@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { RunConfig, RunTestCommand, StepCompletedEvent, normalizeEndpointUrl } from './index.js';
+import {
+  PersonaSpec,
+  RunConfig,
+  RunTestCommand,
+  StepCompletedEvent,
+  normalizeEndpointUrl,
+} from './index.js';
 
 describe('normalizeEndpointUrl', () => {
   it('drops query and hash from absolute URLs', () => {
@@ -41,7 +47,8 @@ describe('event schemas', () => {
     const result = RunTestCommand.safeParse({
       sessionId: 's1',
       targetUrl: 'not a url',
-      persona: 'Happy Path User',
+      persona: PersonaSpec.parse({ id: 'happy-path', name: 'Happy', description: 'd' }),
+      seed: 42,
       goal: 'Log in',
       config: RunConfig.parse({ budgets: {}, allowedOrigins: ['http://localhost:3000'] }),
     });
@@ -54,5 +61,6 @@ describe('event schemas', () => {
       budgets: { maxSteps: 30, maxDurationMs: 300_000, maxTokens: 200_000 },
       allowDestructive: false,
     });
+    expect(config).not.toHaveProperty('settleMs');
   });
 });

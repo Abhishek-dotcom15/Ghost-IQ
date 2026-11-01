@@ -24,6 +24,8 @@ export const AgentAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hover'), ref: ElementRef, reason }),
   z.object({ type: z.literal('scroll'), direction: z.enum(['up', 'down']), reason }),
   z.object({ type: z.literal('goBack'), reason }),
+  z.object({ type: z.literal('goForward'), reason }),
+  z.object({ type: z.literal('reload'), reason }),
   // Same-origin only: a path, never a full URL.
   z.object({ type: z.literal('navigate'), path: z.string().startsWith('/').max(500), reason }),
   z.object({ type: z.literal('wait'), ms: z.number().int().min(100).max(5000), reason }),
@@ -44,6 +46,8 @@ export const ACTION_TYPES = [
   'hover',
   'scroll',
   'goBack',
+  'goForward',
+  'reload',
   'navigate',
   'wait',
   'finish',
@@ -57,7 +61,10 @@ export const PlannerOutput = z
   .object({
     type: z.enum(ACTION_TYPES),
     ref: z.string().optional().describe('Element ref from the snapshot, e.g. e12'),
-    text: z.string().optional().describe('Text to type (fill)'),
+    text: z
+      .string()
+      .optional()
+      .describe('Text to type (fill), or <generate> for a persona-generated value'),
     option: z.string().optional().describe('Option label (select)'),
     key: z.string().optional().describe('Key name (press), e.g. Enter, Tab, Escape'),
     direction: z.enum(['up', 'down']).optional().describe('scroll direction'),
@@ -102,6 +109,8 @@ function stripUnknown(candidate: Record<string, unknown>): Record<string, unknow
     hover: ['ref', 'reason'],
     scroll: ['direction', 'reason'],
     goBack: ['reason'],
+    goForward: ['reason'],
+    reload: ['reason'],
     navigate: ['path', 'reason'],
     wait: ['ms', 'reason'],
     finish: ['goalMet', 'summary'],
@@ -131,8 +140,6 @@ export const RunConfig = z.object({
   allowedOrigins: z.array(z.string()).min(1).max(20),
   /** Whether clicks on delete/pay/purchase-like controls are allowed. */
   allowDestructive: z.boolean().default(false),
-  /** Pause between actions, so the app can settle and the run is watchable. */
-  settleMs: z.number().int().min(0).max(5000).default(300),
 });
 export type RunConfig = z.infer<typeof RunConfig>;
 
@@ -163,6 +170,7 @@ export const ISSUE_KINDS = [
   'blocked_navigation',
   'destructive_blocked',
   'unknown_ref',
+  'action_not_allowed',
 ] as const;
 
 /** Something noteworthy observed during a step. Recorded, never fatal to the run. */
@@ -183,40 +191,3 @@ export const ElementLocator = z.object({
   code: z.string().nullable(),
 });
 export type ElementLocator = z.infer<typeof ElementLocator>;
-
-// ------------------------------------------------------------------ planner HTTP contract
-
-export const HistoryItem = z.object({
-  stepNumber: z.number().int(),
-  kind: z.string(),
-  summary: z.string().max(500),
-  status: z.enum(['PASSED', 'FAILED', 'SKIPPED']),
-  note: z.string().max(500).optional(),
-});
-export type HistoryItem = z.infer<typeof HistoryItem>;
-
-export const NextActionRequest = z.object({
-  sessionId: z.string().min(1),
-  goal: z.string().min(1).max(2000),
-  persona: z.string().min(1).max(100),
-  url: z.string().max(2000),
-  title: z.string().max(500),
-  snapshot: z.string().max(60_000),
-  /** Sliding window of recent steps (the agent's short-term memory). */
-  history: z.array(HistoryItem).max(10),
-  stepNumber: z.number().int().positive(),
-  allowDestructive: z.boolean(),
-});
-export type NextActionRequest = z.infer<typeof NextActionRequest>;
-
-export const NextActionResponse = z.object({
-  action: AgentAction,
-  usage: z.object({
-    tokensIn: z.number().int(),
-    tokensOut: z.number().int(),
-    costUsd: z.number().nullable(),
-  }),
-  model: z.string(),
-  demo: z.boolean(),
-});
-export type NextActionResponse = z.infer<typeof NextActionResponse>;

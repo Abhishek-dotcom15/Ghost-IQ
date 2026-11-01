@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AgentAction, ElementLocator, EndReason, RunConfig, StepIssue } from './agent.js';
+import { BEHAVIOR_TYPES, PersonaSpec } from './persona.js';
 
 /**
  * Socket.IO contract between the runner agent and the control plane.
@@ -16,8 +17,11 @@ export const STEP_KINDS = [
   'HOVER',
   'SCROLL',
   'GO_BACK',
+  'GO_FORWARD',
+  'RELOAD',
   'NAVIGATE',
   'WAIT',
+  'OFFLINE',
 ] as const;
 export const StepKind = z.enum(STEP_KINDS);
 export type StepKind = z.infer<typeof StepKind>;
@@ -39,7 +43,9 @@ export type NetworkRequestRecord = z.infer<typeof NetworkRequestRecord>;
 export const RunTestCommand = z.object({
   sessionId: z.string().min(1),
   targetUrl: z.url(),
-  persona: z.string().min(1).max(100),
+  persona: PersonaSpec,
+  /** Drives every random choice (inputs, pacing, behaviors): same seed, same choices. */
+  seed: z.number().int().min(0),
   goal: z.string().min(1).max(2000),
   config: RunConfig,
 });
@@ -67,6 +73,8 @@ export const StepCompletedEvent = StepStartedEvent.extend({
   /** Typed value; secrets are masked by the runner before sending. */
   value: z.string().max(5000).optional(),
   agentAction: AgentAction.optional(),
+  /** Set when the step was injected by a persona behavior rather than chosen by the planner. */
+  behavior: z.enum(BEHAVIOR_TYPES).optional(),
   locator: ElementLocator.optional(),
   url: z.string().max(2000).optional(),
   durationMs: z.number().int().nonnegative().optional(),

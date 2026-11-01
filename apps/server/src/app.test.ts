@@ -11,6 +11,7 @@ import { createPrismaClient, type PrismaClient } from './db.js';
 import { loadEnv } from './env.js';
 import { createLlmRuntime } from './llm.js';
 import { AiService } from './services/ai.js';
+import { PersonaRegistry } from './services/personas.js';
 
 // Integration tests against a real throwaway SQLite database and a real Socket.IO server.
 // The schema is pushed once by the vitest global setup (see vitest.config.ts).
@@ -31,7 +32,13 @@ let baseUrl: string;
 beforeAll(async () => {
   prisma = createPrismaClient(env.DATABASE_URL);
   const llm = createLlmRuntime(env, prisma);
-  built = createApp({ env, prisma, ai: new AiService(llm.client), llm });
+  built = createApp({
+    env,
+    prisma,
+    ai: new AiService(llm.client),
+    llm,
+    personas: new PersonaRegistry(prisma),
+  });
   app = built.app;
   await new Promise<void>((resolve) => built.server.listen(0, resolve));
   baseUrl = `http://localhost:${(built.server.address() as AddressInfo).port}`;
@@ -51,7 +58,13 @@ function nextActionBody(sessionId: string, history: unknown[] = []) {
   return {
     sessionId,
     goal: 'Log in',
-    persona: 'Happy Path User',
+    persona: {
+      id: 'happy-path',
+      name: 'Happy Path User',
+      description: 'Methodical user',
+      traits: '',
+      input_strategy: 'valid',
+    },
     url: 'http://localhost:3000/',
     title: 'App',
     snapshot: LOGIN_SNAPSHOT,
@@ -121,7 +134,7 @@ describe('GhostIQ API', () => {
     const base = {
       projectId: project.body.id,
       targetUrl: 'http://localhost:3000',
-      persona: 'Happy Path User',
+      personaId: 'happy-path',
     };
 
     expect(
@@ -152,7 +165,7 @@ describe('buildRunConfig', () => {
     const config = buildRunConfig({
       projectId: 'p',
       targetUrl: 'http://localhost:3000/login?x=1',
-      persona: 'Happy Path User',
+      personaId: 'happy-path',
       allowedOrigins: ['https://auth.example.com/callback', 'localhost:3000', '%%bad'],
       budgets: { maxSteps: 10 },
     });
@@ -160,7 +173,6 @@ describe('buildRunConfig', () => {
       budgets: { maxSteps: 10, maxDurationMs: 300_000, maxTokens: 200_000 },
       allowedOrigins: ['http://localhost:3000', 'https://auth.example.com'],
       allowDestructive: false,
-      settleMs: 300,
     });
   });
 });
@@ -245,7 +257,7 @@ describe('runner protocol', () => {
       .send({
         projectId: project.id,
         targetUrl: 'http://localhost:3000',
-        persona: 'Happy Path User',
+        personaId: 'happy-path',
         goal: 'Log in',
         budgets: { maxSteps: 5 },
       });
@@ -254,6 +266,8 @@ describe('runner protocol', () => {
     expect(command).toMatchObject({
       sessionId: started.body.id,
       goal: 'Log in',
+      seed: 42,
+      persona: { id: 'happy-path', name: 'Happy Path User', input_strategy: 'valid' },
       config: {
         budgets: { maxSteps: 5 },
         allowedOrigins: ['http://localhost:3000'],
@@ -351,7 +365,7 @@ describe('runner protocol', () => {
     const started = await request(app).post('/api/sessions').send({
       projectId: project.id,
       targetUrl: 'http://localhost:3000',
-      persona: 'Happy Path User',
+      personaId: 'happy-path',
     });
 
     const cancelled = new Promise<{ sessionId: string }>((resolve) =>
@@ -367,5 +381,116 @@ describe('runner protocol', () => {
     });
     expect(session.endReason).toBe('runner_disconnected');
     expect((await request(app).post(`/api/sessions/${started.body.id}/cancel`)).status).toBe(409);
+  });
+});
+
+describe('personas API', () => {
+  const CUSTOM = `id: checkout-rusher
+name: Checkout Rusher
+description: Hurries through checkout.
+input_strategy: boundary
+behaviors:
+  - { type: double_click, probability: 0.5 }
+seed: 99
+`;
+
+  it('lists the eight built-in personas', async () => {
+    const res = await request(app).get('/api/personas');
+    expect(res.status).toBe(200);
+    const builtins = res.body.filter((p: { source: string }) => p.source === 'builtin');
+    expect(builtins).toHaveLength(8);
+    expect(builtins[0]).toMatchObject({
+      editable: false,
+      spec: expect.any(Object),
+      yaml: expect.any(String),
+    });
+  });
+
+  it('validates YAML with line numbers and previews generated inputs', async () => {
+    const bad = await request(app)
+      .post('/api/personas/validate')
+      .send({ yaml: `${CUSTOM}network: 5g\n` });
+    expect(bad.body).toMatchObject({
+      ok: false,
+      errors: [expect.objectContaining({ line: 8, path: 'network' })],
+    });
+
+    const good = await request(app).post('/api/personas/validate').send({ yaml: CUSTOM });
+    expect(good.body).toMatchObject({
+      ok: true,
+      persona: { id: 'checkout-rusher', seed: 99 },
+      preview: { behaviors: ['double_click (50%)'], device: 'Laptop 1280x720' },
+    });
+    expect(good.body.preview.sampleInputs.length).toBeGreaterThan(3);
+  });
+
+  it('creates, updates and deletes a custom persona without code changes', async () => {
+    const created = await request(app).post('/api/personas').send({ yaml: CUSTOM });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({
+      id: 'checkout-rusher',
+      source: 'custom',
+      editable: true,
+      version: 1,
+    });
+
+    expect((await request(app).post('/api/personas').send({ yaml: CUSTOM })).status).toBe(409);
+
+    const updated = await request(app)
+      .put('/api/personas/checkout-rusher')
+      .send({ yaml: CUSTOM.replace('seed: 99', 'seed: 100') });
+    expect(updated.body).toMatchObject({ version: 2, spec: { seed: 100 } });
+
+    const invalid = await request(app)
+      .put('/api/personas/checkout-rusher')
+      .send({ yaml: CUSTOM.replace('boundary', 'chaos') });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.errors[0]).toMatchObject({ line: 4, path: 'input_strategy' });
+
+    expect((await request(app).delete('/api/personas/checkout-rusher')).status).toBe(204);
+    expect((await request(app).get('/api/personas/checkout-rusher')).status).toBe(404);
+  });
+
+  it('protects built-in personas from edits and id clashes', async () => {
+    const clash = await request(app)
+      .post('/api/personas')
+      .send({ yaml: 'id: happy-path\nname: Fake\ndescription: x\n' });
+    expect(clash.status).toBe(409);
+    expect((await request(app).delete('/api/personas/happy-path')).status).toBe(409);
+  });
+
+  it('requires consent for opt-in personas and rejects unknown personas', async () => {
+    const project = await prisma.project.create({ data: { name: 'Consent' } });
+    const agent = await connectAgent(project.id);
+    const base = { projectId: project.id, targetUrl: 'http://localhost:3000' };
+
+    const missing = await request(app)
+      .post('/api/sessions')
+      .send({ ...base, personaId: 'nobody' });
+    expect(missing.status).toBe(404);
+
+    const noConsent = await request(app)
+      .post('/api/sessions')
+      .send({ ...base, personaId: 'security-hygiene' });
+    expect(noConsent.status).toBe(400);
+    expect(noConsent.body.requiresConsent).toBe(true);
+
+    const received = new Promise<RunTestCommand>((resolve) =>
+      agent.once(SocketEvents.runStart, resolve),
+    );
+    const ok = await request(app)
+      .post('/api/sessions')
+      .send({ ...base, personaId: 'security-hygiene', consent: true, seed: 7 });
+    expect(ok.status).toBe(201);
+    expect(ok.body).toMatchObject({
+      personaId: 'security-hygiene',
+      seed: 7,
+      persona: 'Security Hygiene Prober',
+    });
+    const command = await received;
+    expect(command.seed).toBe(7);
+    // Falls back to the persona's own goal when the run does not give one.
+    expect(command.goal).toBe('Check that errors, admin pages and user input are handled safely.');
+    agent.disconnect();
   });
 });

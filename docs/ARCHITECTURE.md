@@ -41,6 +41,7 @@ a server, without opening inbound ports to the app under test.
 | Path                       | Role                                                                                                                                                                                                                                                  |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `packages/core`            | Agent loop: observe, plan, act, record. Budgets, loop detection, guardrails and secret masking against a `BrowserDriver`/`Planner` interface. No browser or network dependency.                                                                       |
+| `packages/personas`        | Persona specs as data: YAML loader with line-numbered errors, the 8 built-in personas, seeded RNG, input generators (valid/boundary/naughty/unicode/empty/mixed), behavior injection, device and network profiles. See `docs/PERSONAS.md`.            |
 | `packages/llm`             | Provider-agnostic LLM client. Thin adapters (Gemini, Claude, OpenAI-compatible/Ollama, mock) behind one core that owns schema validation + one repair retry, backoff retries, timeouts, the fallback chain, caching, cost metering and record/replay. |
 | `packages/shared`          | zod schemas for every socket event plus shared helpers. Both server and runner validate against it, so a payload change is a compile error on both sides.                                                                                             |
 | `apps/server`              | REST API, Socket.IO hub, persistence, AI orchestration. `createApp()` builds everything without listening, which is what the integration tests use.                                                                                                   |
@@ -113,6 +114,7 @@ Every provider call (initial, retry, repair or cache hit) is written to the `Llm
 
 - No authentication yet: anyone who can reach the server can drive a runner or call the planner (Phase 7).
 - Bugs are recorded per step but not yet deduplicated or ranked (Phase 4: Findings).
-- Login is via `--storage-state` only; a scripted login prelude and personas as data arrive in Phase 3.
+- Login is via `--storage-state` only (no scripted login prelude yet).
+- With a real model the planner is not deterministic, so only inputs, pacing and behavior rolls are seed-reproducible; Phase 5 replay removes the model.
 - Events are broadcast to every dashboard (Phase 7: per-project rooms).
 - Without an LLM key, planning comes from the scripted demo responder (a mock provider), labelled `[demo]` everywhere. It exercises the same LLM pipeline as a real model.

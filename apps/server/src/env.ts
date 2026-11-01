@@ -19,6 +19,8 @@ const EnvSchema = z.object({
   GHOSTIQ_SCREENSHOT_DIR: z.string().default('public/screenshots'),
   /** Run artifacts such as Playwright traces. */
   GHOSTIQ_ARTIFACT_DIR: z.string().default('public/artifacts'),
+  /** Optional folder of persona YAML files, loaded at boot alongside the built-ins. */
+  GHOSTIQ_PERSONAS_DIR: optional(z.string()),
 
   // ---- LLM (see packages/llm). Unset provider + no key => demo mode.
   GHOSTIQ_LLM_PROVIDER: optional(z.enum(['gemini', 'claude', 'openai', 'ollama', 'mock'])),

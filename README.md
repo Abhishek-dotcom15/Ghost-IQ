@@ -9,11 +9,30 @@
 different user personas through your web app (localhost, staging or production), watches
 network traffic, console errors and accessibility, and reports what broke with evidence.
 
-> **Status: v0.4 — agent core.** Phases 0–2 of [the build plan](docs/PLAN.md) are done: a tested
-> monorepo, a provider-agnostic LLM layer, and an agent that reads pages through Playwright's
-> AI-mode aria snapshot, picks from a closed set of actions, runs inside budgets and guardrails,
-> and records bugs as evidence instead of stopping. Next: personas as data (Phase 3), the findings
-> engine (Phase 4) and Playwright export (Phase 5). Nothing below claims more than the code does today.
+> **Status: v0.5 — personas as data.** Phases 0–3 of [the build plan](docs/PLAN.md) are done: a
+> tested monorepo, a provider-agnostic LLM layer, an agent core with guardrails and budgets, and
+> eight personas defined as YAML (seeded inputs, behaviors, devices, network profiles) that you can
+> extend without code. Next: the findings engine (Phase 4) and Playwright export (Phase 5).
+> Nothing below claims more than the code does today.
+
+## Personas
+
+| Persona                      | Focus                                                                            |
+| ---------------------------- | -------------------------------------------------------------------------------- |
+| Happy Path User              | Valid flows; checks each step succeeded                                          |
+| Chaotic Explorer             | Non-linear navigation, double-clicks, rapid repeats, back/forward                |
+| Form Stress Tester           | Empty, boundary, probe and unicode values; double submits                        |
+| Impatient User               | Double-clicks, refresh mid-flow, back/forward, on fast 3G                        |
+| Keyboard-only User           | Tab/Enter/Space only; clicks are not allowed                                     |
+| Mobile User on Slow 3G       | iPhone 13 viewport, slow 3G, occasional offline blips                            |
+| Unicode & International User | CJK, Arabic, Hebrew, emoji, combining and zero-width characters                  |
+| Security Hygiene Prober      | Opt-in, consent required, never destructive: guessable paths and unescaped input |
+
+Each is a YAML file in [`packages/personas/builtin/`](packages/personas/builtin/). Duplicate one
+in the dashboard's Personas page (live validation with line numbers, a preview of generated
+values, and a dry run on the demo app), or drop your own YAML into `GHOSTIQ_PERSONAS_DIR`.
+Same persona + same seed = the same inputs, pacing and behaviors. See
+[docs/PERSONAS.md](docs/PERSONAS.md).
 
 ## Quick start
 
@@ -90,10 +109,11 @@ packages/
   shared/      zod schemas for the runner <-> server protocol
   llm/         provider-agnostic LLM client (Gemini, Claude, OpenAI-compatible, Ollama, mock)
   core/        agent loop, guardrails and budgets (browser-independent, fully unit-tested)
+  personas/    persona YAML loader, 8 built-in personas, seeded input generators, device/network profiles
 examples/
   mock-target-app/   demo app with seeded bugs
 scripts/smoke.mjs    end-to-end smoke test
-docs/                PLAN.md, ARCHITECTURE.md
+docs/                PLAN.md, ARCHITECTURE.md, PERSONAS.md
 ```
 
 ## Development commands

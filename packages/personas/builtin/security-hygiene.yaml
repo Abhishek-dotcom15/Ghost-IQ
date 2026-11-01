@@ -1,0 +1,20 @@
+# Security Hygiene Prober (opt-in). A safe hygiene check for apps YOU OWN: not an
+# offensive scanner. Runs require explicit consent. It never performs destructive actions.
+id: security-hygiene
+name: Security Hygiene Prober
+description: Looks for basic security hygiene gaps on an app you own - exposed errors, guessable URLs, unescaped input.
+traits: >-
+  Try same-site paths a curious user might guess (/admin, /api, /debug, changing numeric IDs
+  in URLs). Enter the generated probe strings into inputs and look for them being rendered
+  unescaped or causing stack traces. Never try to bypass a login, brute-force anything or
+  access other users' data beyond what the UI shows.
+goals:
+  - Check that errors, admin pages and user input are handled safely.
+pacing: { min_ms: 300, max_ms: 800 }
+input_strategy: naughty_strings
+behaviors: []
+device: laptop
+network: none
+risk_tolerance: safe # destructive actions are never allowed for this persona
+requires_consent: true
+seed: 42

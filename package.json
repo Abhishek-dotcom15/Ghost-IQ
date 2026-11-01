@@ -20,7 +20,7 @@
     "test": "pnpm build:packages && pnpm -r run test",
     "db:setup": "pnpm --filter @ghostiq/server db:setup",
     "smoke": "node scripts/smoke.mjs",
-    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "verify": "pnpm format:check && pnpm lint && node scripts/check-dockerfile.mjs && pnpm typecheck && pnpm test && pnpm build",
     "prepare": "husky"
   },
   "devDependencies": {

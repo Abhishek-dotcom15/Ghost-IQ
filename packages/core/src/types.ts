@@ -40,6 +40,8 @@ export interface BrowserDriver {
   observe(): Promise<Observation>;
   execute(action: Exclude<AgentAction, { type: 'finish' }>, signal: AbortSignal): Promise<void>;
   collect(): Promise<StepSignals>;
+  /** Simulates losing the network (persona offline_blip behavior). */
+  setOffline(offline: boolean): Promise<void>;
 }
 
 export interface PlanResult {

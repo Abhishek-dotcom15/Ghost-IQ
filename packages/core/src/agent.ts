@@ -1,12 +1,22 @@
 import { createHash } from 'node:crypto';
 import {
+  InputGenerator,
+  createRng,
+  deriveSeed,
+  planBehaviors,
+  type InjectedStep,
+} from '@ghostiq/personas';
+import {
+  GENERATE_TOKEN,
   MASK,
   actionRef,
   isAllowedUrl,
   isDestructiveName,
   isSecretField,
   locatorCode,
+  personaBrief,
   type AgentAction,
+  type BehaviorType,
   type ElementLocator,
   type EndReason,
   type HistoryItem,
@@ -33,6 +43,8 @@ const KIND: Record<Exclude<AgentAction['type'], 'finish'>, StepKind> = {
   hover: 'HOVER',
   scroll: 'SCROLL',
   goBack: 'GO_BACK',
+  goForward: 'GO_FORWARD',
+  reload: 'RELOAD',
   navigate: 'NAVIGATE',
   wait: 'WAIT',
 };
@@ -46,7 +58,15 @@ class Cancelled extends Error {}
  */
 export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
   const { command, driver, planner, events, signal } = options;
-  const { budgets, allowedOrigins, allowDestructive, settleMs } = command.config;
+  const { persona, seed } = command;
+  const { budgets, allowedOrigins } = command.config;
+  // A "safe" persona never performs destructive actions, whatever the run allows.
+  const allowDestructive = command.config.allowDestructive && persona.risk_tolerance !== 'safe';
+  // Independent seeded streams, so e.g. a different pacing draw never changes the inputs.
+  const inputs = new InputGenerator(deriveSeed(seed, 'inputs'));
+  const pacingRng = createRng(deriveSeed(seed, 'pacing'));
+  const behaviorRng = createRng(deriveSeed(seed, 'behaviors'));
+  const brief = personaBrief(persona);
   const memorySize = options.memorySize ?? DEFAULTS.memorySize;
   const snapshotLimit = options.snapshotCharLimit ?? DEFAULTS.snapshotCharLimit;
   const loopThreshold = options.loopThreshold ?? DEFAULTS.loopThreshold;
@@ -74,10 +94,16 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
     stats: { steps: stepNumber, tokens, durationMs: now() - startedAt, issues: issueCount },
   });
 
+  const pause = async () => {
+    const ms = pacingRng.int(persona.pacing.min_ms, persona.pacing.max_ms);
+    if (ms > 0) await sleep(ms, signal);
+  };
+
   const record = async (
     kind: StepKind,
     description: string,
     run: () => Promise<{
+      behavior?: BehaviorType;
       status: StepStatus;
       error?: string;
       action?: AgentAction;
@@ -111,6 +137,7 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
       selector: locator?.code ?? undefined,
       value: result.value,
       agentAction: result.action && maskAction(result.action, result.element),
+      behavior: result.behavior,
       locator,
       url,
       durationMs: now() - started,
@@ -121,6 +148,31 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
       networkRequests: signals.network,
     });
     return { status: result.status, issues };
+  };
+
+  const runInjected = async (injected: InjectedStep, element: SnapshotElement | undefined) => {
+    const base = {
+      behavior: injected.behavior,
+      action: injected.actions[0] as AgentAction | undefined,
+      element: injected.actions[0] && 'ref' in injected.actions[0] ? element : undefined,
+    };
+    try {
+      if (injected.offlineMs !== undefined) {
+        await driver.setOffline(true);
+        try {
+          await sleep(injected.offlineMs, signal);
+        } finally {
+          await driver.setOffline(false);
+        }
+      }
+      for (const browserAction of injected.actions) await driver.execute(browserAction, signal);
+      await pause();
+      return { ...base, status: 'PASSED' as const };
+    } catch (err) {
+      if (signal.aborted) throw new Cancelled();
+      // e.g. the second click of a double-click lands after navigation: expected, recorded.
+      return { ...base, status: 'FAILED' as const, error: errorMessage(err) };
+    }
   };
 
   try {
@@ -177,7 +229,7 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
           {
             sessionId: command.sessionId,
             goal: command.goal,
-            persona: command.persona,
+            persona: brief,
             url: observation.url,
             title: observation.title,
             snapshot: truncateSnapshot(observation.snapshot, snapshotLimit),
@@ -203,6 +255,15 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
 
       const ref = actionRef(action);
       const element = ref ? observation.elements.get(ref) : undefined;
+      // Form values come from the persona's seeded generator (reproducible), unless the
+      // persona types valid data and the planner supplied an exact value from the goal.
+      if (
+        action.type === 'fill' &&
+        element &&
+        (persona.input_strategy !== 'valid' || action.text === GENERATE_TOKEN)
+      ) {
+        action = { ...action, text: inputs.value(element, persona.input_strategy).value };
+      }
       const description = describe(action, element);
       const value =
         action.type === 'fill'
@@ -210,9 +271,23 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
             ? MASK
             : action.text
           : undefined;
+      const planned = action;
 
-      const step = await record(KIND[action.type], description, async () => {
-        const base = { action, element, value, observationHash: stateHash };
+      const step = await record(KIND[planned.type], description, async () => {
+        const base = { action: planned, element, value, observationHash: stateHash };
+        if (persona.allowed_actions && !persona.allowed_actions.includes(planned.type)) {
+          return {
+            ...base,
+            status: 'SKIPPED',
+            error: `Skipped: the ${persona.name} persona does not use "${planned.type}".`,
+            extraIssues: [
+              {
+                kind: 'action_not_allowed',
+                message: `${planned.type} is not in this persona's allowed actions (${persona.allowed_actions.join(', ')}).`,
+              },
+            ],
+          };
+        }
         if (ref && !element) {
           return {
             ...base,
@@ -225,7 +300,7 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
         }
         if (
           element &&
-          action.type === 'click' &&
+          planned.type === 'click' &&
           !allowDestructive &&
           isDestructiveName(element.name)
         ) {
@@ -238,8 +313,8 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
             ],
           };
         }
-        if (action.type === 'navigate') {
-          const target = new URL(action.path, observation.url).toString();
+        if (planned.type === 'navigate') {
+          const target = new URL(planned.path, observation.url).toString();
           if (!isAllowedUrl(target, allowedOrigins)) {
             return {
               ...base,
@@ -256,8 +331,8 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
           }
         }
         try {
-          await driver.execute(action, signal);
-          if (settleMs > 0) await sleep(settleMs, signal);
+          await driver.execute(planned, signal);
+          await pause();
           return { ...base, status: 'PASSED' };
         } catch (err) {
           if (signal.aborted) throw new Cancelled();
@@ -267,11 +342,29 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
 
       history.push({
         stepNumber,
-        kind: KIND[action.type],
+        kind: KIND[planned.type],
         summary: description.slice(0, 500),
         status: step.status,
         note: noteFor(step.issues),
       });
+
+      // Persona behaviors (double-click, refresh mid-flow, ...) follow successful actions.
+      // They are recorded as their own steps but never count as planner decisions or failures.
+      if (step.status === 'PASSED') {
+        for (const injected of planBehaviors(persona.behaviors, planned, behaviorRng)) {
+          if (signal.aborted) throw new Cancelled();
+          const result = await record(injected.kind, injected.description, () =>
+            runInjected(injected, element),
+          );
+          history.push({
+            stepNumber,
+            kind: injected.kind,
+            summary: injected.description,
+            status: result.status,
+            note: noteFor(result.issues),
+          });
+        }
+      }
 
       consecutiveFailures = step.status === 'FAILED' ? consecutiveFailures + 1 : 0;
       if (consecutiveFailures >= maxFailures) {
@@ -309,6 +402,10 @@ export function describe(action: AgentAction, element?: SnapshotElement): string
       return `Scroll ${action.direction}${why}`;
     case 'goBack':
       return `Go back${why}`;
+    case 'goForward':
+      return `Go forward${why}`;
+    case 'reload':
+      return `Reload the page${why}`;
     case 'navigate':
       return `Navigate to ${action.path}${why}`;
     case 'wait':

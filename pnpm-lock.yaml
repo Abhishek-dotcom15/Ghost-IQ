@@ -236,6 +236,9 @@ importers:
       '@ghostiq/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@ghostiq/personas':
+        specifier: workspace:*
+        version: link:../../packages/personas
       '@ghostiq/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -261,6 +264,9 @@ importers:
       '@ghostiq/llm':
         specifier: workspace:*
         version: link:../../packages/llm
+      '@ghostiq/personas':
+        specifier: workspace:*
+        version: link:../../packages/personas
       '@ghostiq/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -319,6 +325,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@ghostiq/personas':
+        specifier: workspace:*
+        version: link:../personas
       '@ghostiq/shared':
         specifier: workspace:*
         version: link:../shared
@@ -334,6 +343,15 @@ importers:
       zod:
         specifier: ^4.6.7
         version: 4.6.7
+
+  packages/personas:
+    dependencies:
+      '@ghostiq/shared':
+        specifier: workspace:*
+        version: link:../shared
+      yaml:
+        specifier: ^2.9.1
+        version: 2.9.1
 
   packages/shared:
     dependencies:
@@ -5278,8 +5296,7 @@ snapshots:
 
   yallist@3.1.1: {}
 
-  yaml@2.9.1:
-    optional: true
+  yaml@2.9.1: {}
 
   yocto-queue@0.1.0: {}
 

@@ -1,0 +1,18 @@
+# Form Stress Tester: missing client- and server-side validation.
+id: form-stress-tester
+name: Form Stress Tester
+description: Submits forms empty, half-filled and with boundary or malformed values, then checks how the app reacts.
+traits: >-
+  For every form: first submit it empty, then with the generated values, then fix one field
+  at a time. Note whether errors are shown next to the right field and whether invalid data
+  is accepted. Use <generate> for field values.
+goals:
+  - Find every form and check that invalid input is rejected with a clear message.
+pacing: { min_ms: 150, max_ms: 500 }
+input_strategy: mixed # mostly boundary, naughty, unicode and empty values, sometimes valid
+behaviors:
+  - { type: double_click, probability: 0.20 } # double submits
+device: laptop
+network: none
+risk_tolerance: normal
+seed: 1337

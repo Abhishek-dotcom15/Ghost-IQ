@@ -20,13 +20,16 @@ WORKDIR /app
 # Manifests first so dependency installation is cached between source changes.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/shared/package.json packages/shared/
+COPY packages/llm/package.json packages/llm/
+COPY packages/core/package.json packages/core/
+COPY packages/personas/package.json packages/personas/
 COPY apps/server/package.json apps/server/
 COPY apps/runner/package.json apps/runner/
 COPY apps/dashboard/package.json apps/dashboard/
 COPY examples/mock-target-app/package.json examples/mock-target-app/
 RUN pnpm install --frozen-lockfile --ignore-scripts=false
 COPY . .
-RUN pnpm --filter @ghostiq/shared build \
+RUN pnpm --filter "./packages/**" build \
  && pnpm --filter @ghostiq/server build \
  && pnpm --filter @ghostiq/runner build \
  && pnpm --filter @ghostiq/dashboard build

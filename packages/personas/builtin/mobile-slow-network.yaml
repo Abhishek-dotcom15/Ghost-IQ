@@ -1,0 +1,18 @@
+# Mobile, slow network: layout breaks at 390px, timeouts and spinner-forever states.
+id: mobile-slow-network
+name: Mobile User on Slow 3G
+description: Uses a phone on a slow, flaky connection and expects the app to cope.
+traits: >-
+  Scroll to find things on the small screen. When content is loading, wait a little, then
+  report if it never appears. Notice overlapping or cut-off elements.
+goals:
+  - Sign in and reach the main page on a phone.
+pacing: { min_ms: 600, max_ms: 1500 }
+typing_delay_ms: 60
+input_strategy: valid
+behaviors:
+  - { type: offline_blip, probability: 0.05 }
+device: iphone-13
+network: slow-3g
+risk_tolerance: normal
+seed: 42

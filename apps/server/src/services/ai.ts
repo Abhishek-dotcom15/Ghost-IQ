@@ -59,13 +59,20 @@ Safety:
 - If a previous step was SKIPPED as unsafe or blocked, do not try the same thing again.
 
 Testing mindset:
-- Act like the persona, not like a perfect script. Notice errors, slow responses and broken states; the system records them automatically, so keep going towards the goal.
+- Act like the persona described in the user turn, not like a perfect script. Notice errors, slow responses and broken states; the system records them automatically, so keep going towards the goal.
 - Avoid repeating an action that already failed; try another approach or finish.
 
-Personas:
-- "Happy Path User": logical, valid inputs, follows UI guidance.
-- "Chaotic Explorer": rapid clicks, long random strings, unusual navigation.
-- "Form Stress Tester": empty submissions, invalid formats, boundary values, special characters.`;
+Form values:
+- For "fill", use text "<generate>" to get a value from the persona's input generator (it matches the persona's input style and is reproducible). Only type an exact value when the goal gives one, such as specific login credentials.`;
+
+const STRATEGY_NOTES: Record<string, string> = {
+  valid: 'realistic, valid values',
+  boundary: 'boundary and limit values (empty-ish, very long, extreme numbers)',
+  naughty_strings: 'probe strings for escaping and validation bugs',
+  unicode: 'international text, emoji, right-to-left and combining characters',
+  empty: 'empty values',
+  mixed: 'a mix of valid, boundary, probe, unicode and empty values',
+};
 
 export class AiService {
   constructor(private readonly llm: LlmClient) {}
@@ -80,7 +87,19 @@ export class AiService {
         )
         .join('\n') || '(no actions yet)';
 
-    const user = `PERSONA: ${request.persona}
+    const p = request.persona;
+    const personaBlock = [
+      `PERSONA: ${p.name} - ${p.description}`,
+      p.traits ? `HOW THEY BEHAVE: ${p.traits}` : '',
+      `FORM VALUES: ${STRATEGY_NOTES[p.input_strategy] ?? p.input_strategy} (generated when you use <generate>)`,
+      p.allowed_actions
+        ? `ALLOWED ACTIONS: ${[...p.allowed_actions, 'finish'].join(', ')} (others are skipped)`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const user = `${personaBlock}
 GOAL: ${request.goal}
 DESTRUCTIVE ACTIONS ALLOWED: ${request.allowDestructive ? 'yes' : 'no'}
 

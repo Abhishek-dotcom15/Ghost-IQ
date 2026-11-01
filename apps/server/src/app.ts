@@ -23,12 +23,33 @@ import type { Env } from './env.js';
 import { computeFlakinessScore, updateRunningAverage } from './lib/flakiness.js';
 import { describeLlm, type LlmRuntime } from './llm.js';
 import type { AiService } from './services/ai.js';
+import {
+  PersonaConflictError,
+  PersonaValidationError,
+  type PersonaRecord,
+  type PersonaRegistry,
+} from './services/personas.js';
 
 export interface AppDeps {
   env: Env;
   prisma: PrismaClient;
   ai: AiService;
   llm: LlmRuntime;
+  personas: PersonaRegistry;
+}
+
+/** Persona as returned by the API (spec included for the builder and launch form). */
+function personaView(p: PersonaRecord) {
+  return {
+    id: p.id,
+    name: p.name,
+    description: p.description,
+    source: p.source,
+    editable: p.editable,
+    version: p.version,
+    yaml: p.yaml,
+    spec: p.spec,
+  };
 }
 
 export interface GhostIqApp {
@@ -43,7 +64,16 @@ const DEFAULT_GOAL = 'Explore the app like the persona would and try its main fl
 export const StartRunBody = z.object({
   projectId: z.string().min(1),
   targetUrl: z.url(),
-  persona: z.string().min(1).max(100),
+  personaId: z.string().min(1).max(60),
+  /** Overrides the persona's seed, e.g. to reproduce a previous run exactly. */
+  seed: z
+    .number()
+    .int()
+    .min(0)
+    .max(2 ** 31 - 1)
+    .optional(),
+  /** Required for personas marked requires_consent (e.g. security probing). */
+  consent: z.boolean().optional(),
   goal: z.string().max(2000).optional(),
   budgets: z
     .object({
@@ -73,7 +103,7 @@ export function buildRunConfig(body: StartRunBody): RunConfig {
  * Builds the HTTP server, Express app and Socket.IO hub without listening,
  * so tests can drive it with supertest.
  */
-export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
+export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqApp {
   const corsOrigins = env.GHOSTIQ_CORS_ORIGINS.split(',')
     .map((o) => o.trim())
     .filter(Boolean);
@@ -185,6 +215,7 @@ export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
             durationMs: data.durationMs ?? null,
             observationHash: data.observationHash ?? null,
             issuesJson: data.issues.length ? JSON.stringify(data.issues) : null,
+            behavior: data.behavior ?? null,
           },
         });
 
@@ -334,6 +365,18 @@ export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
       res.status(404).json({ error: 'Project not found' });
       return;
     }
+    const persona = await personas.get(body.data.personaId);
+    if (!persona) {
+      res.status(404).json({ error: `Persona "${body.data.personaId}" not found` });
+      return;
+    }
+    if (persona.spec.requires_consent && body.data.consent !== true) {
+      res.status(400).json({
+        error: `The ${persona.name} persona needs explicit consent: confirm you own or are authorised to test ${body.data.targetUrl}.`,
+        requiresConsent: true,
+      });
+      return;
+    }
     const agentSocket = connectedAgents.get(project.id);
     if (!agentSocket) {
       res.status(409).json({
@@ -342,13 +385,16 @@ export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
       return;
     }
 
-    const goal = body.data.goal?.trim() || DEFAULT_GOAL;
+    const goal = body.data.goal?.trim() || persona.spec.goals[0] || DEFAULT_GOAL;
+    const seed = body.data.seed ?? persona.spec.seed;
     const session = await prisma.testSession.create({
       data: {
         projectId: project.id,
-        name: `${body.data.persona}: ${goal.slice(0, 80)}`,
+        name: `${persona.name}: ${goal.slice(0, 80)}`,
         targetUrl: body.data.targetUrl,
-        persona: body.data.persona,
+        persona: persona.name,
+        personaId: persona.id,
+        seed,
         goal,
         configJson: JSON.stringify(config),
         status: 'RUNNING',
@@ -358,13 +404,91 @@ export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
     const command: RunTestCommand = {
       sessionId: session.id,
       targetUrl: body.data.targetUrl,
-      persona: body.data.persona,
+      persona: persona.spec,
+      seed,
       goal,
       config,
     };
     activeRuns.set(session.id, agentSocket);
     agentSocket.emit(SocketEvents.runStart, command);
     res.status(201).json(session);
+  });
+
+  // ---------------------------------------------------------------- personas
+  const yamlBody = (body: unknown): string | null =>
+    typeof (body as { yaml?: unknown })?.yaml === 'string' ? (body as { yaml: string }).yaml : null;
+
+  const personaError = (res: Response, err: unknown) => {
+    if (err instanceof PersonaValidationError) {
+      res.status(400).json({ error: 'Invalid persona', errors: err.errors });
+    } else if (err instanceof PersonaConflictError) {
+      res.status(409).json({ error: err.message });
+    } else {
+      throw err;
+    }
+  };
+
+  app.get('/api/personas', async (_req, res) => {
+    res.json((await personas.list()).map(personaView));
+  });
+
+  app.get('/api/personas/:id', async (req, res) => {
+    const persona = await personas.get(req.params.id);
+    if (!persona) {
+      res.status(404).json({ error: 'Persona not found' });
+      return;
+    }
+    res.json(personaView(persona));
+  });
+
+  /** Dry run for the Persona Builder: validate YAML and preview generated inputs. */
+  app.post('/api/personas/validate', (req, res) => {
+    const yaml = yamlBody(req.body);
+    if (yaml === null) {
+      res.status(400).json({ error: 'Send { "yaml": "..." }' });
+      return;
+    }
+    res.json(personas.validate(yaml));
+  });
+
+  app.post('/api/personas', async (req, res) => {
+    const yaml = yamlBody(req.body);
+    if (yaml === null) {
+      res.status(400).json({ error: 'Send { "yaml": "..." }' });
+      return;
+    }
+    try {
+      res.status(201).json(personaView(await personas.create(yaml)));
+    } catch (err) {
+      personaError(res, err);
+    }
+  });
+
+  app.put('/api/personas/:id', async (req, res) => {
+    const yaml = yamlBody(req.body);
+    if (yaml === null) {
+      res.status(400).json({ error: 'Send { "yaml": "..." }' });
+      return;
+    }
+    try {
+      const updated = await personas.update(req.params.id, yaml);
+      if (!updated) {
+        res.status(404).json({ error: 'Persona not found' });
+        return;
+      }
+      res.json(personaView(updated));
+    } catch (err) {
+      personaError(res, err);
+    }
+  });
+
+  app.delete('/api/personas/:id', async (req, res) => {
+    try {
+      const deleted = await personas.delete(req.params.id);
+      res.status(deleted ? 204 : 404).end();
+    } catch (err) {
+      personaError(res, err);
+    }
   });
 
   app.post('/api/sessions/:id/cancel', async (req, res) => {

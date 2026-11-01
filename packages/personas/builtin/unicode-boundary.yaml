@@ -1,0 +1,16 @@
+# Unicode tester: encoding bugs, broken layouts with long or RTL text, emoji handling.
+id: unicode-boundary
+name: Unicode & International User
+description: Enters names, addresses and messages in many scripts, with emoji, right-to-left text and combining characters.
+traits: >-
+  Use <generate> for every text field. After saving, look at where the value is shown again
+  and check it is displayed exactly as typed, without mojibake, truncation or overflow.
+goals:
+  - Enter international text into every form you find and check it round-trips correctly.
+pacing: { min_ms: 200, max_ms: 600 }
+input_strategy: unicode
+behaviors: []
+device: desktop
+network: none
+risk_tolerance: normal
+seed: 2026

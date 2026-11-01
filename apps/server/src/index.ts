@@ -3,12 +3,14 @@ import { createPrismaClient } from './db.js';
 import { loadEnv } from './env.js';
 import { createLlmRuntime, describeLlm } from './llm.js';
 import { AiService } from './services/ai.js';
+import { PersonaRegistry } from './services/personas.js';
 
 const env = loadEnv();
 const prisma = createPrismaClient(env.DATABASE_URL);
 const llm = createLlmRuntime(env, prisma);
 const ai = new AiService(llm.client);
-const { server, io } = createApp({ env, prisma, ai, llm });
+const personas = new PersonaRegistry(prisma, env.GHOSTIQ_PERSONAS_DIR);
+const { server, io } = createApp({ env, prisma, ai, llm, personas });
 
 server.listen(env.PORT, () => {
   console.log(`GhostIQ server listening on http://localhost:${env.PORT}`);

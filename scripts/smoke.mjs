@@ -7,6 +7,7 @@
 //                                       actions, time and LLM cost per run
 //   node scripts/smoke.mjs --live       use the LLM configured in apps/server/.env instead
 //                                       of demo mode (costs money, needs a key)
+//   --persona <id>                      persona for the benchmark runs (default happy-path)
 //
 // Prerequisites: `pnpm build`, `pnpm db:setup`, Chromium installed for Playwright.
 import { spawn } from 'node:child_process';
@@ -18,6 +19,7 @@ const { values: args } = parseArgs({
   options: {
     runs: { type: 'string', default: '1' },
     live: { type: 'boolean', default: false },
+    persona: { type: 'string', default: 'happy-path' },
     goal: { type: 'string', default: 'Sign in with valid credentials and reach the dashboard.' },
   },
 });
@@ -69,15 +71,16 @@ function assert(condition, message) {
 
 const getJson = async (url) => (await fetch(url)).json();
 
-async function runOnce(index) {
+async function runOnce(index, { personaId = args.persona, seed, goal = args.goal } = {}) {
   const res = await fetch(`${SERVER}/api/sessions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       projectId: PROJECT_ID,
       targetUrl: TARGET,
-      persona: 'Happy Path User',
-      goal: args.goal,
+      personaId,
+      ...(seed === undefined ? {} : { seed }),
+      goal,
       budgets: { maxSteps: 15 },
     }),
   });
@@ -106,8 +109,10 @@ async function runOnce(index) {
   console.log(`\nRun ${index}: ${session.status} (${session.endReason}) - ${session.summary}`);
   for (const s of session.steps) {
     const issues = s.issuesJson ? ` [${JSON.parse(s.issuesJson).length} issue(s)]` : '';
+    const value = s.value ? ` = ${JSON.stringify(s.value)}` : '';
+    const behavior = s.behavior ? ` <${s.behavior}>` : '';
     console.log(
-      `  ${s.stepNumber}. ${s.action.padEnd(8)} ${s.status.padEnd(7)} ${s.description}${issues}`,
+      `  ${s.stepNumber}. ${s.action.padEnd(8)} ${s.status.padEnd(7)} ${s.description}${value}${behavior}${issues}`,
     );
   }
   return withTrace;
@@ -183,6 +188,19 @@ async function main() {
       project.endpoints.some((e) => e.url.endsWith('/api/auth/login')),
       'login API call recorded',
     );
+
+    // Personas as data: same persona + same seed reproduces the same inputs and behaviors.
+    console.log('\n--- Reproducibility: form-stress-tester, seeds 1234, 1234, 99 ---');
+    const fingerprint = (r) =>
+      JSON.stringify(r.steps.map((s) => [s.action, s.behavior ?? null, s.value ?? null]));
+    const goal = 'Stress the login form.';
+    const a = await runOnce('seed 1234 (a)', { personaId: 'form-stress-tester', seed: 1234, goal });
+    const b = await runOnce('seed 1234 (b)', { personaId: 'form-stress-tester', seed: 1234, goal });
+    const c = await runOnce('seed 99', { personaId: 'form-stress-tester', seed: 99, goal });
+    assert(a.seed === 1234 && a.persona === 'Form Stress Tester', 'persona and seed recorded');
+    assert(a.steps[1].value !== 'testuser@ghostiq.io', 'form stress persona used generated input');
+    assert(fingerprint(a) === fingerprint(b), 'same seed reproduced the same inputs and behaviors');
+    assert(fingerprint(a) !== fingerprint(c), 'a different seed produced different inputs');
   }
 
   console.log('\nSmoke test passed.');

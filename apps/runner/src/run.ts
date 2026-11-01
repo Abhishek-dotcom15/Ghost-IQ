@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runAgent, type RunOutcome } from '@ghostiq/core';
+import { resolveDevice, resolveNetwork } from '@ghostiq/personas';
 import { SocketEvents, type RunTestCommand } from '@ghostiq/shared';
 import type { Socket } from 'socket.io-client';
 import { PlaywrightDriver } from './driver.js';
@@ -22,16 +23,23 @@ export async function executeRun(
   signal: AbortSignal,
 ): Promise<RunOutcome> {
   const log = (msg: string) => console.log(`[${command.sessionId.slice(0, 8)}] ${msg}`);
-  log(`start: ${command.persona} -> ${command.targetUrl} | goal: ${command.goal}`);
+  log(`start: ${command.persona.name} -> ${command.targetUrl} | goal: ${command.goal}`);
 
   let driver: PlaywrightDriver | undefined;
   let outcome: RunOutcome;
   try {
+    const device = resolveDevice(command.persona.device);
+    log(
+      `persona: ${command.persona.name} | seed ${command.seed} | ${device.label} | network ${command.persona.network}`,
+    );
     driver = await PlaywrightDriver.launch({
       allowedOrigins: command.config.allowedOrigins,
       headless: options.headless,
       trace: options.trace,
       storageStatePath: options.storageStatePath,
+      device,
+      network: resolveNetwork(command.persona.network),
+      typingDelayMs: command.persona.typing_delay_ms,
     });
     outcome = await runAgent({
       command,

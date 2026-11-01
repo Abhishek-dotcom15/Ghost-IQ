@@ -30,6 +30,8 @@ interface TestStep {
   status: 'PASSED' | 'FAILED' | 'SKIPPED';
   /** JSON StepIssue[]: bugs and blocked actions observed during the step. */
   issuesJson?: string | null;
+  /** Persona behavior that injected this step, e.g. double_click. */
+  behavior?: string | null;
   error?: string;
   screenshotPath?: string;
   /** JSON-encoded list of accessibility violations captured on this step. */
@@ -48,6 +50,7 @@ interface SessionDetail {
   startedAt: string;
   endedAt?: string;
   goal?: string | null;
+  seed?: number | null;
   endReason?: string | null;
   summary?: string | null;
   traceUrl?: string | null;
@@ -619,6 +622,17 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                     {sessionDetail.persona}
                   </strong>
                 </div>
+                {sessionDetail.seed !== null && sessionDetail.seed !== undefined && (
+                  <div
+                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}
+                    title="Re-run with this seed to get the same inputs, pacing and behaviors"
+                  >
+                    <span>Seed</span>
+                    <strong style={{ color: '#fff', marginTop: '0.1rem' }}>
+                      {sessionDetail.seed}
+                    </strong>
+                  </div>
+                )}
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
                   <span>Started</span>
                   <span style={{ color: '#fff', marginTop: '0.1rem' }}>
@@ -846,6 +860,15 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                               >
                                 {step.action}
                               </span>
+                              {step.behavior && (
+                                <span
+                                  className="badge"
+                                  style={{ fontSize: '0.65rem' }}
+                                  title="Injected by the persona, not chosen by the planner"
+                                >
+                                  {step.behavior}
+                                </span>
+                              )}
                               {parseIssues(step.issuesJson).length > 0 && (
                                 <span
                                   className="badge badge-warning"

@@ -366,7 +366,7 @@ export default function App() {
               <SessionsView project={selectedProject} socket={socket} />
             )}
             {currentView === 'endpoints' && <EndpointsView project={selectedProject} />}
-            {currentView === 'personas' && <PersonaBuilder />}
+            {currentView === 'personas' && <PersonaBuilder project={selectedProject} />}
             {currentView === 'settings' && <LlmStatusPanel />}
           </>
         )}

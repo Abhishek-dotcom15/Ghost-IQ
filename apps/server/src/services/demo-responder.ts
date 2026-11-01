@@ -1,5 +1,10 @@
 import type { MockResponder } from '@ghostiq/llm';
-import { parseAriaSnapshot, type HistoryItem, type SnapshotElement } from '@ghostiq/shared';
+import {
+  GENERATE_TOKEN,
+  parseAriaSnapshot,
+  type HistoryItem,
+  type SnapshotElement,
+} from '@ghostiq/shared';
 
 /**
  * Scripted answers for demo mode (no LLM configured) and for tests. It logs in to the
@@ -16,7 +21,6 @@ export const demoResponder: MockResponder = (request) => {
       return demoNextAction(
         String(meta.snapshot ?? ''),
         Array.isArray(meta.history) ? (meta.history as HistoryItem[]) : [],
-        String(meta.persona ?? ''),
       );
     case 'diagnostics':
       return {
@@ -37,7 +41,12 @@ function find(elements: SnapshotElement[], role: string, name: RegExp) {
   return elements.find((e) => e.role === role && name.test(e.name));
 }
 
-function demoNextAction(snapshot: string, history: HistoryItem[], persona: string) {
+/**
+ * Walks the mock app login. The email is fixed so the smoke test can assert it; the
+ * password uses <generate>, so personas with non-valid input strategies get their own
+ * generated values from the agent core.
+ */
+function demoNextAction(snapshot: string, history: HistoryItem[]) {
   const elements = [...parseAriaSnapshot(snapshot).values()];
   const email = find(elements, 'textbox', /e-?mail/i);
   const password = find(elements, 'textbox', /password/i);
@@ -49,7 +58,7 @@ function demoNextAction(snapshot: string, history: HistoryItem[], persona: strin
     return {
       type: 'fill',
       ref: email.ref,
-      text: persona === 'Form Stress Tester' ? 'invalid-email-format' : 'testuser@ghostiq.io',
+      text: 'testuser@ghostiq.io',
       reason: '[demo] fill the email field',
     };
   }
@@ -57,7 +66,7 @@ function demoNextAction(snapshot: string, history: HistoryItem[], persona: strin
     return {
       type: 'fill',
       ref: password.ref,
-      text: 'password123',
+      text: GENERATE_TOKEN,
       reason: '[demo] fill the password',
     };
   }

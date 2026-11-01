@@ -1,6 +1,8 @@
 import {
+  PersonaSpec,
   RunConfig,
   parseAriaSnapshot,
+  type PersonaSpecInput,
   type AgentAction,
   type NextActionRequest,
   type StepCompletedEvent,
@@ -48,11 +50,26 @@ class FakeDriver implements BrowserDriver {
     if (action.type === 'navigate') this.current = new URL(action.path, this.current).toString();
     if (this.mutates) this.snapshot += `\n- generic: changed ${this.executed.length}`;
   }
+  offline: boolean[] = [];
+  async setOffline(offline: boolean) {
+    this.offline.push(offline);
+  }
   async collect(): Promise<StepSignals> {
     const issues = this.pendingIssues;
     this.pendingIssues = [];
     return { network: [], issues, screenshotBase64: 'png' };
   }
+}
+
+/** A test persona: valid inputs, no pauses, no behaviors unless overridden. */
+function makePersona(overrides: Partial<PersonaSpecInput> = {}): PersonaSpec {
+  return PersonaSpec.parse({
+    id: 'tester',
+    name: 'Tester',
+    description: 'Test persona',
+    pacing: { min_ms: 0, max_ms: 0 },
+    ...overrides,
+  });
 }
 
 /** Plays back a fixed list of actions; repeats the last one when the list runs out. */
@@ -74,6 +91,8 @@ function setup(
     config?: Partial<RunConfig>;
     budgets?: Partial<RunConfig['budgets']>;
     options?: Partial<AgentOptions>;
+    persona?: Partial<PersonaSpecInput>;
+    seed?: number;
   } = {},
 ) {
   const driver = new FakeDriver();
@@ -90,7 +109,8 @@ function setup(
     command: {
       sessionId: 's1',
       targetUrl: 'http://app.test/',
-      persona: 'Happy Path User',
+      persona: makePersona(overrides.persona),
+      seed: overrides.seed ?? 42,
       goal: 'Log in',
       config,
     },
@@ -314,6 +334,111 @@ describe('runAgent', () => {
   });
 });
 
+describe('personas in the loop', () => {
+  const fillBoth: AgentAction[] = [
+    { type: 'fill', ref: 'e1', text: 'from-the-model@example.test', reason: 'email' },
+    { type: 'fill', ref: 'e2', text: 'model-password', reason: 'password' },
+    { type: 'finish', goalMet: false, summary: 'done' },
+  ];
+
+  it('uses seeded generated inputs for non-valid strategies, reproducibly', async () => {
+    const typed = async (seed: number) => {
+      const t = setup([...fillBoth], { persona: { input_strategy: 'unicode' }, seed });
+      await t.run();
+      return t.driver.executed.map((a) => (a.type === 'fill' ? a.text : ''));
+    };
+    const first = await typed(7);
+    expect(first[0]).not.toBe('from-the-model@example.test');
+    expect(await typed(7)).toEqual(first);
+    expect(await typed(8)).not.toEqual(first);
+  });
+
+  it('keeps exact values from the planner for valid personas, but honours <generate>', async () => {
+    const t = setup([
+      { type: 'fill', ref: 'e1', text: 'admin@corp.test', reason: 'credentials from the goal' },
+      { type: 'fill', ref: 'e2', text: '<generate>', reason: 'any password' },
+      { type: 'finish', goalMet: true, summary: 'done' },
+    ]);
+    await t.run();
+    expect(t.driver.executed[0]).toMatchObject({ text: 'admin@corp.test' });
+    expect(t.driver.executed[1]).toMatchObject({ text: expect.stringMatching(/^Gh0st-/) });
+    expect(t.completed[2]!.value).toBe('••••••');
+  });
+
+  it('skips actions outside the persona allowed_actions', async () => {
+    const t = setup(
+      [
+        { type: 'click', ref: 'e3', reason: 'submit' },
+        { type: 'press', key: 'Enter', reason: 'submit with keyboard' },
+        { type: 'finish', goalMet: true, summary: 'done' },
+      ],
+      { persona: { allowed_actions: ['press', 'fill'] } },
+    );
+    await t.run();
+    expect(t.completed[1]).toMatchObject({ status: 'SKIPPED' });
+    expect(t.completed[1]!.issues[0]!.kind).toBe('action_not_allowed');
+    expect(t.driver.executed).toEqual([expect.objectContaining({ type: 'press' })]);
+    expect(t.requests[0]!.persona.allowed_actions).toEqual(['press', 'fill']);
+  });
+
+  it('never lets a safe persona perform destructive actions', async () => {
+    const t = setup(
+      [
+        { type: 'click', ref: 'e4', reason: 'explore' },
+        { type: 'finish', goalMet: false, summary: 'done' },
+      ],
+      { config: { allowDestructive: true }, persona: { risk_tolerance: 'safe' } },
+    );
+    await t.run();
+    expect(t.driver.executed).toHaveLength(0);
+    expect(t.requests[0]!.allowDestructive).toBe(false);
+  });
+
+  it('injects persona behaviors as their own recorded steps', async () => {
+    const t = setup(
+      [
+        { type: 'click', ref: 'e3', reason: 'submit' },
+        { type: 'finish', goalMet: true, summary: 'done' },
+      ],
+      { persona: { behaviors: [{ type: 'double_click', probability: 1 }] } },
+    );
+    const outcome = await t.run();
+    expect(t.started).toEqual(['GOTO', 'CLICK', 'CLICK']);
+    expect(t.completed[2]).toMatchObject({ behavior: 'double_click', status: 'PASSED' });
+    expect(t.driver.executed.filter((a) => a.type === 'click')).toHaveLength(2);
+    expect(t.requests[1]!.history.map((h) => h.summary)).toEqual([
+      'Click button "Sign In" (submit)',
+      'Double-click: click e3 again immediately',
+    ]);
+    expect(outcome.stats.steps).toBe(3);
+  });
+
+  it('cuts and restores the network for offline_blip', async () => {
+    const t = setup([...fillBoth], {
+      persona: { behaviors: [{ type: 'offline_blip', probability: 1 }] },
+    });
+    await t.run();
+    expect(t.started.filter((k) => k === 'OFFLINE')).toHaveLength(2);
+    expect(t.driver.offline).toEqual([true, false, true, false]);
+  });
+
+  it('paces actions within the persona range, deterministically', async () => {
+    const pauses = async () => {
+      const waits: number[] = [];
+      const t = setup([...fillBoth], {
+        persona: { pacing: { min_ms: 100, max_ms: 400 } },
+        options: { sleep: async (ms) => void waits.push(ms) },
+      });
+      await t.run();
+      return waits;
+    };
+    const first = await pauses();
+    expect(first).toHaveLength(2);
+    expect(first.every((ms) => ms >= 100 && ms <= 400)).toBe(true);
+    expect(await pauses()).toEqual(first);
+  });
+});
+
 describe('truncateSnapshot', () => {
   it('cuts at a line boundary and says so', () => {
     const snapshot = Array.from({ length: 100 }, (_, i) => `- button "B${i}" [ref=e${i}]`).join(
@@ -338,7 +463,8 @@ function setupOptions(t: ReturnType<typeof setup>): AgentOptions {
     command: {
       sessionId: 's1',
       targetUrl: 'http://app.test/',
-      persona: 'Happy Path User',
+      persona: makePersona(),
+      seed: 42,
       goal: 'Log in',
       config: RunConfig.parse({
         budgets: { maxTokens: 1000 },
