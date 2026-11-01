@@ -40,6 +40,7 @@ a server, without opening inbound ports to the app under test.
 
 | Path                       | Role                                                                                                                                                                                                                                                  |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/core`            | Agent loop: observe, plan, act, record. Budgets, loop detection, guardrails and secret masking against a `BrowserDriver`/`Planner` interface. No browser or network dependency.                                                                       |
 | `packages/llm`             | Provider-agnostic LLM client. Thin adapters (Gemini, Claude, OpenAI-compatible/Ollama, mock) behind one core that owns schema validation + one repair retry, backoff retries, timeouts, the fallback chain, caching, cost metering and record/replay. |
 | `packages/shared`          | zod schemas for every socket event plus shared helpers. Both server and runner validate against it, so a payload change is a compile error on both sides.                                                                                             |
 | `apps/server`              | REST API, Socket.IO hub, persistence, AI orchestration. `createApp()` builds everything without listening, which is what the integration tests use.                                                                                                   |
@@ -47,14 +48,57 @@ a server, without opening inbound ports to the app under test.
 | `apps/dashboard`           | React UI. Uses relative URLs; Vite proxies them in dev and the server serves the built files in production, so there is one origin and no URL configuration.                                                                                          |
 | `examples/mock-target-app` | Demo target with deliberately seeded bugs; becomes the benchmark app in Phase 4.                                                                                                                                                                      |
 
-## Run lifecycle (current protocol)
+## Run lifecycle
 
-1. Dashboard `POST /api/sessions` → server creates a `TestSession` and emits `run-test` to the project's runner.
-2. Runner opens a fresh browser, navigates, and loops: snapshot DOM → `POST /api/ai/plan-step` → act → collect network, console and a11y → emit `step-completed` with a screenshot.
-3. Server validates each event, stores the step, network calls and endpoint health, then forwards a `session-update:<id>` event to dashboards.
-4. Runner emits `session-completed`; the server computes the flakiness score and, for failures, asks the AI service for a diagnostic report.
+```mermaid
+sequenceDiagram
+  participant D as Dashboard
+  participant S as Server
+  participant R as Runner (packages/core + Playwright)
+  participant L as LLM (packages/llm)
+  D->>S: POST /api/sessions {targetUrl, persona, goal, budgets}
+  S->>R: run:start {sessionId, goal, config}
+  loop until finish, budget, loop, stuck or cancel
+    R->>R: observe: ariaSnapshot({mode: 'ai'}) with refs
+    R->>S: POST /api/ai/next-action {snapshot, last 6 steps}
+    S->>L: generate(PlannerOutput schema)
+    L-->>S: one validated action
+    S-->>R: {action, usage}
+    R->>R: guardrails, then act via page.getByRef(ref)
+    R->>S: step:event {status, locator, issues, network, screenshot}
+    S-->>D: session-update
+  end
+  R->>S: run:finished {status, endReason, summary, stats}
+  R->>S: PUT /api/sessions/:id/trace (trace.zip)
+```
 
-Phase 2 replaces step 2 with the agent core (Playwright `ariaSnapshot({ mode: 'ai' })` refs, a closed action schema, budgets and guardrails) and introduces the namespaced protocol (`run:start`, `step:event`, `finding:raw`, `heal:proposed`, `run:finished`, `run:cancel`).
+The agent loop (`packages/core`) is browser-independent: it talks to a `BrowserDriver` and a
+`Planner` interface, so every budget, guardrail and end condition is unit-tested without a browser.
+The runner supplies the Playwright driver and an HTTP planner; the LLM and its keys stay on the server.
+
+**Closed action set.** The model returns one flat JSON object (portable across providers and
+small models) that is validated, then converted to a strict union: `click`, `fill`, `select`,
+`press`, `hover`, `scroll`, `goBack`, `navigate` (same-origin path only), `wait`, `finish`.
+Elements are addressed by snapshot ref, never by a model-invented selector. Each target is also
+stored as a durable locator (`page.getByRole(role, { name })`) for replay and export.
+
+**Guardrails.**
+
+| Risk                        | Control                                                                                                                                                                            |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Leaving the site under test | Origin allowlist checked before `navigate` and enforced in the browser by aborting off-site main-frame navigations; the driver returns to the last allowed page; popups are closed |
+| Irreversible actions        | Clicks on elements named like delete / remove / pay / purchase / place order / cancel subscription are skipped (recorded as `destructive_blocked`) unless `allowDestructive`       |
+| Prompt injection            | Snapshot is fenced as untrusted data in the prompt; output is schema-limited, so a fooled model can only choose permitted actions on allowed origins                               |
+| Runaway runs                | Budgets for actions, wall time and tokens; the same page state 3 times ends the run (`loop_detected`); 3 failed actions in a row end it (`stuck`); cancel at any time              |
+| Secret leakage              | Values typed into password/token/key fields are stored and streamed as `••••••`                                                                                                    |
+
+**Bugs never stop a run.** Console errors, uncaught exceptions, 5xx responses and failed requests
+are attached to the step as `issues` and the agent keeps going. Phase 4 turns them into
+deduplicated, severity-ranked Findings.
+
+**End reasons:** `goal_met`, `goal_not_met`, `budget_steps`, `budget_time`, `budget_tokens`,
+`loop_detected`, `stuck`, `planner_error`, `start_failed`, `cancelled`, `runner_error`,
+`runner_disconnected`.
 
 ## Configuration
 
@@ -67,7 +111,8 @@ Every provider call (initial, retry, repair or cache hit) is written to the `Llm
 
 ## Known limitations (tracked in `docs/PLAN.md`)
 
-- No authentication yet: anyone who can reach the server can drive a runner (Phase 7).
+- No authentication yet: anyone who can reach the server can drive a runner or call the planner (Phase 7).
+- Bugs are recorded per step but not yet deduplicated or ranked (Phase 4: Findings).
+- Login is via `--storage-state` only; a scripted login prelude and personas as data arrive in Phase 3.
 - Events are broadcast to every dashboard (Phase 7: per-project rooms).
-- The runner stops a run at the first failing step instead of recording a finding and continuing (Phase 2).
 - Without an LLM key, planning comes from the scripted demo responder (a mock provider), labelled `[demo]` everywhere. It exercises the same LLM pipeline as a real model.

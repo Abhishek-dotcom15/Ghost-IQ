@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RunTestCommand, StepCompletedEvent, normalizeEndpointUrl } from './index.js';
+import { RunConfig, RunTestCommand, StepCompletedEvent, normalizeEndpointUrl } from './index.js';
 
 describe('normalizeEndpointUrl', () => {
   it('drops query and hash from absolute URLs', () => {
@@ -14,7 +14,7 @@ describe('normalizeEndpointUrl', () => {
 });
 
 describe('event schemas', () => {
-  it('defaults networkRequests to an empty list', () => {
+  it('defaults networkRequests and issues to empty lists', () => {
     const parsed = StepCompletedEvent.parse({
       sessionId: 's1',
       stepNumber: 1,
@@ -23,9 +23,10 @@ describe('event schemas', () => {
       status: 'PASSED',
     });
     expect(parsed.networkRequests).toEqual([]);
+    expect(parsed.issues).toEqual([]);
   });
 
-  it('rejects unknown actions', () => {
+  it('rejects unknown step kinds', () => {
     const result = StepCompletedEvent.safeParse({
       sessionId: 's1',
       stepNumber: 1,
@@ -42,7 +43,16 @@ describe('event schemas', () => {
       targetUrl: 'not a url',
       persona: 'Happy Path User',
       goal: 'Log in',
+      config: RunConfig.parse({ budgets: {}, allowedOrigins: ['http://localhost:3000'] }),
     });
     expect(result.success).toBe(false);
+  });
+
+  it('fills run config defaults', () => {
+    const config = RunConfig.parse({ budgets: {}, allowedOrigins: ['http://localhost:3000'] });
+    expect(config).toMatchObject({
+      budgets: { maxSteps: 30, maxDurationMs: 300_000, maxTokens: 200_000 },
+      allowDestructive: false,
+    });
   });
 });

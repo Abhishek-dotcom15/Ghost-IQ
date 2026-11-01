@@ -17,6 +17,8 @@ const EnvSchema = z.object({
   /** Directory with the built dashboard; served by the API in production images. */
   GHOSTIQ_DASHBOARD_DIR: optional(z.string()),
   GHOSTIQ_SCREENSHOT_DIR: z.string().default('public/screenshots'),
+  /** Run artifacts such as Playwright traces. */
+  GHOSTIQ_ARTIFACT_DIR: z.string().default('public/artifacts'),
 
   // ---- LLM (see packages/llm). Unset provider + no key => demo mode.
   GHOSTIQ_LLM_PROVIDER: optional(z.enum(['gemini', 'claude', 'openai', 'ollama', 'mock'])),

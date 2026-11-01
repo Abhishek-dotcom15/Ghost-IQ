@@ -1,20 +1,31 @@
 import { z } from 'zod';
+import { AgentAction, ElementLocator, EndReason, RunConfig, StepIssue } from './agent.js';
 
 /**
  * Socket.IO contract between the runner agent and the control plane.
  * Both sides import these schemas; the server validates every inbound payload.
- * Event names follow the v1 protocol used by the original prototype and will be
- * migrated to the namespaced protocol (`run:start`, `step:event`, ...) in Phase 2.
  */
 
-export const STEP_ACTIONS = ['GOTO', 'CLICK', 'TYPE', 'ASSERTION', 'COMPLETE', 'FAIL'] as const;
-export const StepActionType = z.enum(STEP_ACTIONS);
-export type StepActionType = z.infer<typeof StepActionType>;
+/** Step kinds as shown in the UI: the initial navigation plus one per agent action type. */
+export const STEP_KINDS = [
+  'GOTO',
+  'CLICK',
+  'FILL',
+  'SELECT',
+  'PRESS',
+  'HOVER',
+  'SCROLL',
+  'GO_BACK',
+  'NAVIGATE',
+  'WAIT',
+] as const;
+export const StepKind = z.enum(STEP_KINDS);
+export type StepKind = z.infer<typeof StepKind>;
 
-export const StepStatus = z.enum(['PASSED', 'FAILED']);
+export const StepStatus = z.enum(['PASSED', 'FAILED', 'SKIPPED']);
 export type StepStatus = z.infer<typeof StepStatus>;
 
-export const SessionStatus = z.enum(['PENDING', 'RUNNING', 'PASSED', 'FAILED']);
+export const SessionStatus = z.enum(['PENDING', 'RUNNING', 'PASSED', 'FAILED', 'CANCELLED']);
 export type SessionStatus = z.infer<typeof SessionStatus>;
 
 export const NetworkRequestRecord = z.object({
@@ -30,13 +41,17 @@ export const RunTestCommand = z.object({
   targetUrl: z.url(),
   persona: z.string().min(1).max(100),
   goal: z.string().min(1).max(2000),
+  config: RunConfig,
 });
 export type RunTestCommand = z.infer<typeof RunTestCommand>;
+
+export const RunCancelCommand = z.object({ sessionId: z.string().min(1) });
+export type RunCancelCommand = z.infer<typeof RunCancelCommand>;
 
 export const StepStartedEvent = z.object({
   sessionId: z.string().min(1),
   stepNumber: z.number().int().positive(),
-  action: StepActionType,
+  action: StepKind,
   description: z.string().max(2000),
 });
 export type StepStartedEvent = z.infer<typeof StepStartedEvent>;
@@ -47,26 +62,46 @@ const MAX_SCREENSHOT_BASE64 = 10 * 1024 * 1024;
 export const StepCompletedEvent = StepStartedEvent.extend({
   status: StepStatus,
   error: z.string().max(20_000).optional(),
+  /** Durable locator code for the target element (also shown in the UI). */
   selector: z.string().max(2000).optional(),
+  /** Typed value; secrets are masked by the runner before sending. */
   value: z.string().max(5000).optional(),
+  agentAction: AgentAction.optional(),
+  locator: ElementLocator.optional(),
+  url: z.string().max(2000).optional(),
+  durationMs: z.number().int().nonnegative().optional(),
+  observationHash: z.string().max(64).optional(),
+  issues: z.array(StepIssue).max(200).default([]),
   screenshotBase64: z.string().max(MAX_SCREENSHOT_BASE64).optional(),
   a11yViolations: z.string().max(200_000).optional(),
   networkRequests: z.array(NetworkRequestRecord).max(1000).default([]),
 });
 export type StepCompletedEvent = z.infer<typeof StepCompletedEvent>;
 
+export const RunStats = z.object({
+  steps: z.number().int().nonnegative(),
+  tokens: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative(),
+  issues: z.number().int().nonnegative(),
+});
+export type RunStats = z.infer<typeof RunStats>;
+
 export const SessionCompletedEvent = z.object({
   sessionId: z.string().min(1),
-  status: z.enum(['PASSED', 'FAILED']),
+  status: z.enum(['PASSED', 'FAILED', 'CANCELLED']),
+  endReason: EndReason,
+  summary: z.string().max(2000),
+  stats: RunStats,
 });
 export type SessionCompletedEvent = z.infer<typeof SessionCompletedEvent>;
 
 /** Event names, so neither side hard-codes strings. */
 export const SocketEvents = {
-  runTest: 'run-test',
-  stepStarted: 'step-started',
-  stepCompleted: 'step-completed',
-  sessionCompleted: 'session-completed',
+  runStart: 'run:start',
+  runCancel: 'run:cancel',
+  stepStarted: 'step:started',
+  stepCompleted: 'step:event',
+  sessionCompleted: 'run:finished',
   agentStatusChange: 'agent-status-change',
   sessionUpdate: (sessionId: string) => `session-update:${sessionId}`,
 } as const;

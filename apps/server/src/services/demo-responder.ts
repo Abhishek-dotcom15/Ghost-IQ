@@ -1,19 +1,23 @@
 import type { MockResponder } from '@ghostiq/llm';
+import { parseAriaSnapshot, type HistoryItem, type SnapshotElement } from '@ghostiq/shared';
 
 /**
- * Scripted answers for demo mode (no LLM configured) and for tests. It walks the
- * mock app's login form so the whole pipeline can be exercised without a key.
- * Everything it produces is labelled "[demo]". It is not AI.
+ * Scripted answers for demo mode (no LLM configured) and for tests. It logs in to the
+ * mock app by reading the real aria snapshot, so the whole pipeline (refs, guardrails,
+ * evidence, metering) runs without a key. Everything it produces is labelled "[demo]".
+ * It is not AI.
  */
 export const demoResponder: MockResponder = (request) => {
   const meta = request.metadata ?? {};
   switch (request.purpose) {
     case 'health-check':
       return { ok: true };
-    case 'plan-step':
-      return demoPlan(meta);
-    case 'heal-selector':
-      return demoHeal(String(meta.failedSelector ?? ''));
+    case 'next-action':
+      return demoNextAction(
+        String(meta.snapshot ?? ''),
+        Array.isArray(meta.history) ? (meta.history as HistoryItem[]) : [],
+        String(meta.persona ?? ''),
+      );
     case 'diagnostics':
       return {
         summary:
@@ -29,71 +33,44 @@ export const demoResponder: MockResponder = (request) => {
   }
 };
 
-interface HistoryEntry {
-  action?: unknown;
+function find(elements: SnapshotElement[], role: string, name: RegExp) {
+  return elements.find((e) => e.role === role && name.test(e.name));
 }
 
-function demoPlan(meta: Record<string, unknown>) {
-  const history = Array.isArray(meta.history) ? (meta.history as HistoryEntry[]) : [];
-  // The initial navigation is recorded as a GOTO step; it is not a planner decision.
-  const decisions = history.filter((h) => h.action !== 'GOTO').length;
-  const snapshot = String(meta.htmlSnapshot ?? '');
-  const persona = String(meta.persona ?? '');
-  // The mock app's email field is <input type="text" id="email">, so match by id/name/type.
-  const hasLoginForm = /id="email"|name="email"|type="email"|type="password"/i.test(snapshot);
+function demoNextAction(snapshot: string, history: HistoryItem[], persona: string) {
+  const elements = [...parseAriaSnapshot(snapshot).values()];
+  const email = find(elements, 'textbox', /e-?mail/i);
+  const password = find(elements, 'textbox', /password/i);
+  const submit = find(elements, 'button', /sign in|log ?in|submit/i);
+  const done = (kind: string, label: RegExp) =>
+    history.some((h) => h.kind === kind && h.status === 'PASSED' && label.test(h.summary));
 
-  if (!hasLoginForm && decisions === 0) {
+  if (email && !done('FILL', /mail/i)) {
     return {
-      action: 'COMPLETE',
-      thought: 'Demo script only knows the login form of the mock app.',
-      description: '[demo] No login form found; demo script finished',
+      type: 'fill',
+      ref: email.ref,
+      text: persona === 'Form Stress Tester' ? 'invalid-email-format' : 'testuser@ghostiq.io',
+      reason: '[demo] fill the email field',
     };
   }
-
-  switch (decisions) {
-    case 0:
-      return {
-        action: 'TYPE',
-        selector: 'input#email, input[type="email"]',
-        value: persona === 'Form Stress Tester' ? 'invalid-email-format' : 'testuser@ghostiq.io',
-        thought: 'Scripted demo: fill the email field.',
-        description: '[demo] Typing email into the login form',
-      };
-    case 1:
-      return {
-        action: 'TYPE',
-        selector: 'input[type="password"]',
-        value: 'password123',
-        thought: 'Scripted demo: fill the password field.',
-        description: '[demo] Typing password',
-      };
-    case 2:
-      return {
-        action: 'CLICK',
-        selector: 'button[type="submit"]',
-        thought: 'Scripted demo: submit the form.',
-        description: '[demo] Clicking submit',
-      };
-    default:
-      return {
-        action: 'COMPLETE',
-        thought: 'Scripted demo finished.',
-        description: '[demo] Demo script complete (configure an LLM for real exploration)',
-      };
-  }
-}
-
-function demoHeal(failedSelector: string) {
-  if (failedSelector.includes('submit-btn')) {
+  if (password && !done('FILL', /password/i)) {
     return {
-      healedSelector: 'button[type="submit"]',
-      confidence: 0.9,
-      reasoning: '[demo] Scripted heal for the mock app submit button.',
+      type: 'fill',
+      ref: password.ref,
+      text: 'password123',
+      reason: '[demo] fill the password',
     };
   }
+  if (submit && !done('CLICK', /sign in|log ?in|submit/i)) {
+    return { type: 'click', ref: submit.ref, reason: '[demo] submit the login form' };
+  }
+  const loggedIn = history.some((h) => h.kind === 'CLICK' && h.status === 'PASSED');
   return {
-    healedSelector: failedSelector,
-    confidence: 0,
-    reasoning: '[demo] No scripted heal available.',
+    type: 'finish',
+    goalMet: loggedIn,
+    summary: loggedIn
+      ? '[demo] Submitted the login form. Configure an LLM for real exploration.'
+      : '[demo] No login form found; the demo script only knows the mock app.',
+    reason: '[demo] script complete',
   };
 }

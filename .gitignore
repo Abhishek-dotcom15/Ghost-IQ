@@ -19,6 +19,7 @@ coverage/
 *.db-journal
 apps/server/data/
 apps/server/public/screenshots/
+apps/server/public/artifacts/
 artifacts/
 test-results/
 playwright-report/

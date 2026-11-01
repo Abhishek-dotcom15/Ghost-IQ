@@ -233,6 +233,9 @@ importers:
 
   apps/runner:
     dependencies:
+      '@ghostiq/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@ghostiq/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -295,6 +298,9 @@ importers:
       prisma:
         specifier: ^7.10.1
         version: 7.10.1(@types/node@24.19.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(better-sqlite3@12.11.1)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3)
+      socket.io-client:
+        specifier: ^4.8.4
+        version: 4.8.4
       supertest:
         specifier: ^7.3.1
         version: 7.3.1
@@ -310,6 +316,12 @@ importers:
       express:
         specifier: ^5.3.0
         version: 5.3.0
+
+  packages/core:
+    dependencies:
+      '@ghostiq/shared':
+        specifier: workspace:*
+        version: link:../shared
 
   packages/llm:
     dependencies:

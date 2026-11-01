@@ -9,11 +9,11 @@
 different user personas through your web app (localhost, staging or production), watches
 network traffic, console errors and accessibility, and reports what broke with evidence.
 
-> **Status: v0.3 — provider-agnostic LLM layer.** Phases 0–1 of [the build plan](docs/PLAN.md)
-> are done: a tested monorepo and an LLM layer that works with Gemini, Claude, OpenAI-compatible
-> servers and Ollama. The browser agent itself is still the prototype loop; Phases 2–5 replace it
-> with the aria-snapshot agent core, personas as data, a findings engine and Playwright export.
-> Nothing below claims more than the code does today.
+> **Status: v0.4 — agent core.** Phases 0–2 of [the build plan](docs/PLAN.md) are done: a tested
+> monorepo, a provider-agnostic LLM layer, and an agent that reads pages through Playwright's
+> AI-mode aria snapshot, picks from a closed set of actions, runs inside budgets and guardrails,
+> and records bugs as evidence instead of stopping. Next: personas as data (Phase 3), the findings
+> engine (Phase 4) and Playwright export (Phase 5). Nothing below claims more than the code does today.
 
 ## Quick start
 
@@ -68,11 +68,14 @@ shows its own AI cost.
 
 | Area          | Today                                                                                                                                                                                                                |
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Runner agent  | Connects out to the server, drives Chromium, streams steps with screenshots                                                                                                                                          |
+| Agent core    | Observe (aria snapshot with element refs) → plan (LLM picks one action from a closed schema) → act → record. Durable role+name locators stored for every target. Short-term memory of the last 6 steps               |
+| Guardrails    | Origin allowlist enforced in the browser; destructive-click gate (delete, pay, purchase…); same-origin `navigate` only; snapshot treated as untrusted data; secrets masked in recorded values; popups closed         |
+| Budgets       | Max actions, wall time and LLM tokens per run; loop detection; stops after 3 consecutive failed actions; cancel from the dashboard                                                                                   |
+| Evidence      | Console errors, uncaught exceptions, 5xx and failed requests recorded per step as issues (the run keeps going); screenshot per step; Playwright trace per run                                                        |
+| Runner agent  | Connects out to the server (works on localhost), optional `--storage-state` to start logged in, `--headed` to watch                                                                                                  |
 | Telemetry     | Per-request latency and status for fetch/XHR, aggregated per endpoint                                                                                                                                                |
 | Accessibility | Three built-in checks per step (axe-core/WCAG arrives in Phase 4)                                                                                                                                                    |
 | LLM layer     | Gemini, Claude, OpenAI-compatible and Ollama behind one interface; schema-validated output with one repair retry; backoff retries; fallback chain; per-call cost metering; boot health check; record/replay fixtures |
-| Healing       | LLM selector repair on timeout, accepted only at ≥ 0.85 confidence (approval-gated healing arrives in Phase 5)                                                                                                       |
 | Dashboard     | Live step trace, baseline screenshot comparison, endpoint charts, AI failure report                                                                                                                                  |
 | Engineering   | pnpm monorepo, strict TypeScript, shared zod contract, ESLint/Prettier, Vitest unit + integration tests, end-to-end smoke test, CI, Docker images                                                                    |
 
@@ -86,6 +89,7 @@ apps/
 packages/
   shared/      zod schemas for the runner <-> server protocol
   llm/         provider-agnostic LLM client (Gemini, Claude, OpenAI-compatible, Ollama, mock)
+  core/        agent loop, guardrails and budgets (browser-independent, fully unit-tested)
 examples/
   mock-target-app/   demo app with seeded bugs
 scripts/smoke.mjs    end-to-end smoke test
@@ -94,12 +98,13 @@ docs/                PLAN.md, ARCHITECTURE.md
 
 ## Development commands
 
-| Command       | What it does                                                       |
-| ------------- | ------------------------------------------------------------------ |
-| `pnpm dev`    | Run server, dashboard and demo app with reload                     |
-| `pnpm verify` | Format check, lint, typecheck, tests, build (what CI runs)         |
-| `pnpm test`   | Unit and integration tests                                         |
-| `pnpm smoke`  | Full stack end-to-end run (after `pnpm build` and `pnpm db:setup`) |
+| Command                      | What it does                                                                            |
+| ---------------------------- | --------------------------------------------------------------------------------------- |
+| `pnpm dev`                   | Run server, dashboard and demo app with reload                                          |
+| `pnpm verify`                | Format check, lint, typecheck, tests, build (what CI runs)                              |
+| `pnpm test`                  | Unit and integration tests                                                              |
+| `pnpm smoke`                 | Full stack end-to-end run (after `pnpm build` and `pnpm db:setup`)                      |
+| `pnpm smoke --runs 5 --live` | Goal-completion benchmark with your configured model: success rate, actions, time, cost |
 
 ## Roadmap
 

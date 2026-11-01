@@ -10,9 +10,9 @@ interface DashboardViewProps {
 export default function DashboardView({ project, refresh }: DashboardViewProps) {
   const [targetUrl, setTargetUrl] = useState('http://localhost:3000');
   const [persona, setPersona] = useState('Happy Path User');
-  const [goal, setGoal] = useState(
-    'Sign in to the app, browse items, and complete a checkout flow.',
-  );
+  const [goal, setGoal] = useState('Sign in with valid credentials and reach the dashboard.');
+  const [maxSteps, setMaxSteps] = useState(30);
+  const [allowDestructive, setAllowDestructive] = useState(false);
   const [triggering, setTriggering] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -62,6 +62,8 @@ export default function DashboardView({ project, refresh }: DashboardViewProps) 
           targetUrl,
           persona,
           goal,
+          budgets: { maxSteps },
+          allowDestructive,
         }),
       });
 
@@ -286,6 +288,41 @@ export default function DashboardView({ project, refresh }: DashboardViewProps) 
                 required
                 placeholder="Instruct the AI agent on what workflows to stress test..."
               />
+            </div>
+
+            <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <label
+                style={{
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                }}
+              >
+                Max actions
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={maxSteps}
+                  onChange={(e) =>
+                    setMaxSteps(Math.max(1, Math.min(200, Number(e.target.value) || 1)))
+                  }
+                  style={{ width: '5rem' }}
+                />
+              </label>
+              <label
+                style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                title="When off, clicks on delete/pay/purchase-like controls are skipped and recorded"
+              >
+                <input
+                  type="checkbox"
+                  checked={allowDestructive}
+                  onChange={(e) => setAllowDestructive(e.target.checked)}
+                />
+                Allow destructive actions (delete, pay, purchase)
+              </label>
             </div>
 
             <button

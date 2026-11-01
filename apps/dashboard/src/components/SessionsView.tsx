@@ -5,6 +5,7 @@ import {
   FileText,
   CheckCircle2,
   XCircle,
+  MinusCircle,
   ChevronDown,
   ChevronRight,
   AlertTriangle,
@@ -12,7 +13,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import type { Socket } from 'socket.io-client';
-import { formatUsd } from '../lib/format';
+import { formatUsd, parseIssues } from '../lib/format';
 
 interface SessionsViewProps {
   project: Project;
@@ -26,7 +27,9 @@ interface TestStep {
   description: string;
   selector?: string;
   value?: string;
-  status: 'PASSED' | 'FAILED';
+  status: 'PASSED' | 'FAILED' | 'SKIPPED';
+  /** JSON StepIssue[]: bugs and blocked actions observed during the step. */
+  issuesJson?: string | null;
   error?: string;
   screenshotPath?: string;
   /** JSON-encoded list of accessibility violations captured on this step. */
@@ -44,6 +47,10 @@ interface SessionDetail {
   flakinessScore: number;
   startedAt: string;
   endedAt?: string;
+  goal?: string | null;
+  endReason?: string | null;
+  summary?: string | null;
+  traceUrl?: string | null;
   steps: TestStep[];
   /** Present on sessions fetched from the API (not on live socket updates). */
   llmUsage?: {
@@ -110,6 +117,15 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
       }
     } catch {
       setBaselineDetail(null);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!sessionDetail) return;
+    try {
+      await fetch(`/api/sessions/${sessionDetail.id}/cancel`, { method: 'POST' });
+    } catch (err) {
+      console.error('Failed to cancel run:', err);
     }
   };
 
@@ -219,11 +235,15 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
           return {
             ...prev,
             status: event.data.status,
+            endReason: event.data.endReason ?? prev.endReason,
+            summary: event.data.summary ?? prev.summary,
             endedAt: new Date().toISOString(),
           };
         });
         // Reload sessions list in sidebar
         fetchSessions();
+      } else if (event.type === 'trace-ready') {
+        setSessionDetail((prev) => (prev ? { ...prev, traceUrl: event.data.traceUrl } : prev));
       } else if (event.type === 'diagnostics-ready') {
         setAiReport(event.data.diagnostics);
       }
@@ -516,6 +536,53 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                     {sessionDetail.targetUrl}
                   </a>
                 </p>
+                {sessionDetail.goal && (
+                  <p
+                    style={{
+                      fontSize: '0.8rem',
+                      color: 'hsl(var(--text-muted))',
+                      marginTop: '0.2rem',
+                    }}
+                  >
+                    Goal: <span style={{ color: '#fff' }}>{sessionDetail.goal}</span>
+                  </p>
+                )}
+                {sessionDetail.endReason && (
+                  <p style={{ fontSize: '0.8rem', marginTop: '0.35rem' }}>
+                    <code
+                      style={{ fontFamily: 'var(--font-mono)', color: 'hsl(var(--accent-purple))' }}
+                    >
+                      {sessionDetail.endReason}
+                    </code>{' '}
+                    <span style={{ color: 'hsl(var(--text-muted))' }}>{sessionDetail.summary}</span>
+                  </p>
+                )}
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                  {sessionDetail.status === 'RUNNING' && (
+                    <button
+                      onClick={handleCancel}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.7rem', padding: '0.2rem 0.6rem' }}
+                    >
+                      Cancel run
+                    </button>
+                  )}
+                  {sessionDetail.traceUrl && (
+                    <a
+                      href={sessionDetail.traceUrl}
+                      download
+                      className="btn btn-secondary"
+                      style={{
+                        fontSize: '0.7rem',
+                        padding: '0.2rem 0.6rem',
+                        textDecoration: 'none',
+                      }}
+                      title="Open with: npx playwright show-trace trace.zip"
+                    >
+                      Download Playwright trace
+                    </a>
+                  )}
+                </div>
               </div>
 
               <div
@@ -779,8 +846,20 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                               >
                                 {step.action}
                               </span>
+                              {parseIssues(step.issuesJson).length > 0 && (
+                                <span
+                                  className="badge badge-warning"
+                                  style={{ fontSize: '0.65rem' }}
+                                  title="Bugs or blocked actions observed during this step"
+                                >
+                                  {parseIssues(step.issuesJson).length} issue
+                                  {parseIssues(step.issuesJson).length > 1 ? 's' : ''}
+                                </span>
+                              )}
                               {step.status === 'PASSED' ? (
                                 <CheckCircle2 size={16} style={{ color: 'hsl(var(--success))' }} />
+                              ) : step.status === 'SKIPPED' ? (
+                                <MinusCircle size={16} style={{ color: 'hsl(var(--warning))' }} />
                               ) : (
                                 <XCircle size={16} style={{ color: 'hsl(var(--danger))' }} />
                               )}
@@ -799,10 +878,36 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                                 background: 'rgba(0,0,0,0.1)',
                               }}
                             >
-                              {/* Thought summary */}
+                              {parseIssues(step.issuesJson).length > 0 && (
+                                <ul
+                                  style={{
+                                    margin: 0,
+                                    paddingLeft: '1.1rem',
+                                    fontSize: '0.8rem',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.3rem',
+                                  }}
+                                >
+                                  {parseIssues(step.issuesJson).map((issue, i) => (
+                                    <li key={i}>
+                                      <code
+                                        style={{
+                                          fontFamily: 'var(--font-mono)',
+                                          color: 'hsl(var(--warning))',
+                                        }}
+                                      >
+                                        {issue.kind}
+                                      </code>{' '}
+                                      {issue.message}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+
                               {step.selector && (
                                 <div style={{ fontSize: '0.85rem' }}>
-                                  <strong>DOM Selector:</strong>{' '}
+                                  <strong>Locator:</strong>{' '}
                                   <code
                                     style={{
                                       fontFamily: 'var(--font-mono)',

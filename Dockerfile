@@ -37,6 +37,7 @@ ENV NODE_ENV=production \
     PORT=3001 \
     DATABASE_URL=file:/data/ghostiq.db \
     GHOSTIQ_SCREENSHOT_DIR=/data/screenshots \
+    GHOSTIQ_ARTIFACT_DIR=/data/artifacts \
     GHOSTIQ_DASHBOARD_DIR=/app/apps/dashboard/dist
 WORKDIR /app
 COPY --from=build /app /app

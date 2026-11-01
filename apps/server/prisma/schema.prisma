@@ -27,7 +27,15 @@ model TestSession {
   name           String
   targetUrl      String
   persona        String
-  status         String // PENDING, RUNNING, PASSED, FAILED
+  status         String // PENDING, RUNNING, PASSED, FAILED, CANCELLED
+  goal           String?
+  /// RunConfig JSON: budgets, allowed origins, destructive-action permission.
+  configJson     String?
+  /// Why the run ended: goal_met, goal_not_met, budget_steps, loop_detected, cancelled, ...
+  endReason      String?
+  summary        String?
+  /// Playwright trace (open with `npx playwright show-trace <file>`).
+  traceUrl       String?
   isBaseline     Boolean    @default(false)
   flakinessScore Float      @default(0.0)
   startedAt      DateTime   @default(now())
@@ -63,20 +71,31 @@ model LlmCall {
 }
 
 model TestStep {
-  id             String           @id @default(uuid())
-  sessionId      String
-  session        TestSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  stepNumber     Int
-  action         String // GOTO, CLICK, TYPE, ASSERTION, ERROR
-  description    String
-  selector       String?
-  value          String?
-  status         String // PASSED, FAILED
-  error          String?
-  screenshotPath String?
-  a11yViolations String? // JSON list of a11y violations found
-  timestamp      DateTime         @default(now())
-  networkLogs    NetworkRequest[]
+  id              String           @id @default(uuid())
+  sessionId       String
+  session         TestSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  stepNumber      Int
+  action          String // GOTO, CLICK, FILL, SELECT, PRESS, HOVER, SCROLL, GO_BACK, NAVIGATE, WAIT
+  description     String
+  /// Durable locator code, e.g. page.getByRole("button", { name: "Sign In" })
+  selector        String?
+  /// Typed value; secrets are masked by the runner.
+  value           String?
+  status          String // PASSED, FAILED, SKIPPED
+  error           String?
+  screenshotPath  String?
+  a11yViolations  String? // JSON list of a11y violations found
+  /// The validated AgentAction the planner chose (JSON).
+  actionJson      String?
+  /// ElementLocator JSON: snapshot ref, role, accessible name, locator code.
+  locatorJson     String?
+  url             String?
+  durationMs      Int?
+  observationHash String?
+  /// StepIssue[] JSON: console/page errors, failed requests, blocked actions. Never fatal.
+  issuesJson      String?
+  timestamp       DateTime         @default(now())
+  networkLogs     NetworkRequest[]
 
   @@index([sessionId, stepNumber])
 }

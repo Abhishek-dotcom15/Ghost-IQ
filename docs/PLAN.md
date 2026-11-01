@@ -1,6 +1,8 @@
 # GhostIQ — Build Plan (v2)
 
-Status: Phases 0-1 complete (v0.3.0). Next: Phase 2 (agent core). Last updated: 2026-11-01.
+Status: Phases 0-2 complete (v0.4.0). Next: Phase 3 (personas as data). Last updated: 2026-11-01.
+
+**Measured so far.** Phase 2 benchmark (`node scripts/smoke.mjs --runs 5`) in demo mode: 5/5 runs reach `goal_met` on the mock app login, 3 actions, ~1.7 s per run. This checks pipeline reliability only; the real-model baseline needs `--live` with an API key and has not been recorded yet.
 Source idea: `GhostIQ_Project_Blueprint.pdf`. This document records where the code
 really stands, what changed in the research, and the phase plan we will execute.
 

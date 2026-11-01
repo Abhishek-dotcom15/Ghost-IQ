@@ -4,14 +4,20 @@ import path from 'node:path';
 import cors from 'cors';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { Server, type Socket } from 'socket.io';
+import { LlmError } from '@ghostiq/llm';
 import {
-  RunTestCommand,
+  NextActionRequest,
+  RunConfig,
   SessionCompletedEvent,
   SocketEvents,
   StepCompletedEvent,
   StepStartedEvent,
   normalizeEndpointUrl,
+  toOrigin,
+  type NetworkRequestRecord,
+  type RunTestCommand,
 } from '@ghostiq/shared';
+import { z } from 'zod';
 import type { PrismaClient } from './db.js';
 import type { Env } from './env.js';
 import { computeFlakinessScore, updateRunningAverage } from './lib/flakiness.js';
@@ -31,7 +37,37 @@ export interface GhostIqApp {
   io: Server;
 }
 
-const DEFAULT_GOAL = 'Explore the page and verify critical actions like login, nav, and inputs.';
+const DEFAULT_GOAL = 'Explore the app like the persona would and try its main flows.';
+
+/** What a client may send to start a run. Everything except the target has a default. */
+export const StartRunBody = z.object({
+  projectId: z.string().min(1),
+  targetUrl: z.url(),
+  persona: z.string().min(1).max(100),
+  goal: z.string().max(2000).optional(),
+  budgets: z
+    .object({
+      maxSteps: z.number().int().optional(),
+      maxDurationMs: z.number().int().optional(),
+      maxTokens: z.number().int().optional(),
+    })
+    .optional(),
+  /** Extra origins besides the target's own, e.g. an auth domain. */
+  allowedOrigins: z.array(z.string()).max(19).optional(),
+  allowDestructive: z.boolean().optional(),
+});
+export type StartRunBody = z.infer<typeof StartRunBody>;
+
+/** Builds the run config: the target's origin is always allowed, budgets get defaults. */
+export function buildRunConfig(body: StartRunBody): RunConfig {
+  const targetOrigin = new URL(body.targetUrl).origin;
+  const extra = (body.allowedOrigins ?? []).map((o) => toOrigin(o)).filter((o): o is string => !!o);
+  return RunConfig.parse({
+    budgets: body.budgets ?? {},
+    allowedOrigins: [...new Set([targetOrigin, ...extra])],
+    allowDestructive: body.allowDestructive ?? false,
+  });
+}
 
 /**
  * Builds the HTTP server, Express app and Socket.IO hub without listening,
@@ -46,53 +82,80 @@ export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
   const server = http.createServer(app);
   const io = new Server(server, {
     cors: { origin: corsOrigins, methods: ['GET', 'POST'] },
-    maxHttpBufferSize: 1.5e7, // screenshots travel as base64 for now (moved to uploads in Phase 2)
+    maxHttpBufferSize: 1.5e7, // screenshots travel as base64 inside step events
   });
 
   const screenshotsDir = path.resolve(env.GHOSTIQ_SCREENSHOT_DIR);
+  const artifactsDir = path.resolve(env.GHOSTIQ_ARTIFACT_DIR);
   fs.mkdirSync(screenshotsDir, { recursive: true });
+  fs.mkdirSync(artifactsDir, { recursive: true });
 
   app.disable('x-powered-by');
   app.use(cors({ origin: corsOrigins }));
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '2mb' }));
   app.use('/screenshots', express.static(screenshotsDir, { fallthrough: false }));
+  app.use('/artifacts', express.static(artifactsDir, { fallthrough: false }));
 
-  // projectId -> connected runner socket
+  // projectId -> connected runner socket; sessionId -> socket executing it
   const connectedAgents = new Map<string, Socket>();
+  const activeRuns = new Map<string, Socket>();
+
+  const pushUpdate = (sessionId: string, type: string, data: unknown) =>
+    io.emit(SocketEvents.sessionUpdate(sessionId), { type, data });
 
   // ---------------------------------------------------------------- sockets
   io.on('connection', (socket) => {
     const { role, projectId } = socket.handshake.query;
-
     if (role !== 'agent' || typeof projectId !== 'string' || !projectId) return;
 
     connectedAgents.set(projectId, socket);
     console.log(`[agent] connected for project ${projectId}`);
     io.emit(SocketEvents.agentStatusChange, { projectId, status: 'online' });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
       if (connectedAgents.get(projectId) === socket) connectedAgents.delete(projectId);
       io.emit(SocketEvents.agentStatusChange, { projectId, status: 'offline' });
+      // Runs this runner was executing can never finish now.
+      for (const [sessionId, owner] of activeRuns) {
+        if (owner !== socket) continue;
+        activeRuns.delete(sessionId);
+        const summary = 'The runner disconnected before the run finished.';
+        await prisma.testSession
+          .updateMany({
+            where: { id: sessionId, status: 'RUNNING' },
+            data: {
+              status: 'FAILED',
+              endReason: 'runner_disconnected',
+              summary,
+              endedAt: new Date(),
+            },
+          })
+          .catch((err: unknown) => console.error('[agent] failed to close orphaned run:', err));
+        pushUpdate(sessionId, 'session-completed', {
+          sessionId,
+          status: 'FAILED',
+          endReason: 'runner_disconnected',
+          summary,
+        });
+      }
     });
 
     socket.on(SocketEvents.stepStarted, (raw: unknown) => {
       const parsed = StepStartedEvent.safeParse(raw);
       if (!parsed.success) return logInvalid(SocketEvents.stepStarted, parsed.error);
-      const data = parsed.data;
-      io.emit(SocketEvents.sessionUpdate(data.sessionId), { type: 'step-started', data });
+      if (activeRuns.get(parsed.data.sessionId) !== socket) return;
+      pushUpdate(parsed.data.sessionId, 'step-started', parsed.data);
     });
 
     socket.on(SocketEvents.stepCompleted, async (raw: unknown) => {
       const parsed = StepCompletedEvent.safeParse(raw);
       if (!parsed.success) return logInvalid(SocketEvents.stepCompleted, parsed.error);
       const data = parsed.data;
+      if (activeRuns.get(data.sessionId) !== socket) return;
 
       try {
         const session = await prisma.testSession.findUnique({ where: { id: data.sessionId } });
-        if (!session || session.projectId !== projectId) {
-          console.warn(`[agent] step for unknown or foreign session ${data.sessionId} ignored`);
-          return;
-        }
+        if (!session || session.projectId !== projectId) return;
 
         let screenshotUrl: string | null = null;
         if (data.screenshotBase64) {
@@ -116,59 +179,17 @@ export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
             error: data.error ?? null,
             screenshotPath: screenshotUrl,
             a11yViolations: data.a11yViolations ?? null,
+            actionJson: data.agentAction ? JSON.stringify(data.agentAction) : null,
+            locatorJson: data.locator ? JSON.stringify(data.locator) : null,
+            url: data.url ?? null,
+            durationMs: data.durationMs ?? null,
+            observationHash: data.observationHash ?? null,
+            issuesJson: data.issues.length ? JSON.stringify(data.issues) : null,
           },
         });
 
-        for (const req of data.networkRequests) {
-          await prisma.networkRequest.create({
-            data: {
-              stepId: step.id,
-              url: req.url,
-              method: req.method,
-              status: req.status,
-              latencyMs: req.latencyMs,
-            },
-          });
-
-          const url = normalizeEndpointUrl(req.url);
-          const isError = req.status >= 400 || req.status === 0;
-          const key = {
-            projectId_url_method: { projectId: session.projectId, url, method: req.method },
-          };
-          const existing = await prisma.endpointHealth.findUnique({ where: key });
-
-          if (existing) {
-            await prisma.endpointHealth.update({
-              where: { id: existing.id },
-              data: {
-                callCount: existing.callCount + 1,
-                errorCount: existing.errorCount + (isError ? 1 : 0),
-                avgLatencyMs: updateRunningAverage(
-                  existing.avgLatencyMs,
-                  existing.callCount,
-                  req.latencyMs,
-                ),
-                lastCalled: new Date(),
-              },
-            });
-          } else {
-            await prisma.endpointHealth.create({
-              data: {
-                projectId: session.projectId,
-                url,
-                method: req.method,
-                callCount: 1,
-                errorCount: isError ? 1 : 0,
-                avgLatencyMs: req.latencyMs,
-              },
-            });
-          }
-        }
-
-        io.emit(SocketEvents.sessionUpdate(session.id), {
-          type: 'step-completed',
-          data: { ...step, networkLogs: data.networkRequests },
-        });
+        await recordNetwork(prisma, session.projectId, step.id, data.networkRequests);
+        pushUpdate(session.id, 'step-completed', { ...step, networkLogs: data.networkRequests });
       } catch (err) {
         console.error('[agent] failed to persist step:', err);
       }
@@ -178,6 +199,8 @@ export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
       const parsed = SessionCompletedEvent.safeParse(raw);
       if (!parsed.success) return logInvalid(SocketEvents.sessionCompleted, parsed.error);
       const data = parsed.data;
+      if (activeRuns.get(data.sessionId) !== socket) return;
+      activeRuns.delete(data.sessionId);
 
       try {
         const session = await prisma.testSession.findUnique({ where: { id: data.sessionId } });
@@ -185,7 +208,12 @@ export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
 
         await prisma.testSession.update({
           where: { id: session.id },
-          data: { status: data.status, endedAt: new Date() },
+          data: {
+            status: data.status,
+            endReason: data.endReason,
+            summary: data.summary,
+            endedAt: new Date(),
+          },
         });
 
         const history = await prisma.testSession.findMany({
@@ -204,8 +232,7 @@ export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
         });
 
         if (data.status === 'FAILED') void runDiagnostics(session.id);
-
-        io.emit(SocketEvents.sessionUpdate(session.id), { type: 'session-completed', data });
+        pushUpdate(session.id, 'session-completed', data);
       } catch (err) {
         console.error('[agent] failed to complete session:', err);
       }
@@ -220,10 +247,7 @@ export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
       });
       if (!session) return;
       const diagnostics = await ai.generateDiagnosticsReport(session);
-      io.emit(SocketEvents.sessionUpdate(sessionId), {
-        type: 'diagnostics-ready',
-        data: { diagnostics },
-      });
+      pushUpdate(sessionId, 'diagnostics-ready', { diagnostics });
     } catch (err) {
       console.error('[ai] diagnostics failed:', err);
     }
@@ -292,68 +316,109 @@ export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
   });
 
   app.post('/api/sessions', async (req, res) => {
-    const { projectId, targetUrl, persona, goal } = req.body ?? {};
-    if (typeof projectId !== 'string' || !projectId) {
-      res.status(400).json({ error: 'projectId is required' });
+    const body = StartRunBody.safeParse(req.body);
+    if (!body.success) {
+      res.status(400).json({ error: 'Invalid run request', issues: body.error.issues });
       return;
     }
-    const agentSocket = connectedAgents.get(projectId);
+    let config: RunConfig;
+    try {
+      config = buildRunConfig(body.data);
+    } catch (err) {
+      res.status(400).json({ error: `Invalid run configuration: ${(err as Error).message}` });
+      return;
+    }
+
+    const project = await prisma.project.findUnique({ where: { id: body.data.projectId } });
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+    const agentSocket = connectedAgents.get(project.id);
     if (!agentSocket) {
       res.status(409).json({
-        error:
-          'No runner agent is online for this project. Start one with: pnpm --filter @ghostiq/runner start -k <projectId>',
+        error: `No runner agent is online for this project. Start one with: pnpm --filter @ghostiq/runner start -k ${project.id}`,
       });
       return;
     }
 
-    const command = RunTestCommand.omit({ sessionId: true }).safeParse({
-      targetUrl,
-      persona,
-      goal: typeof goal === 'string' && goal.trim() ? goal : DEFAULT_GOAL,
-    });
-    if (!command.success) {
-      res.status(400).json({ error: 'Invalid run request', issues: command.error.issues });
-      return;
-    }
-
+    const goal = body.data.goal?.trim() || DEFAULT_GOAL;
     const session = await prisma.testSession.create({
       data: {
-        projectId,
-        name: `Run: ${command.data.persona} - ${new Date().toISOString()}`,
-        targetUrl: command.data.targetUrl,
-        persona: command.data.persona,
+        projectId: project.id,
+        name: `${body.data.persona}: ${goal.slice(0, 80)}`,
+        targetUrl: body.data.targetUrl,
+        persona: body.data.persona,
+        goal,
+        configJson: JSON.stringify(config),
         status: 'RUNNING',
       },
     });
 
-    agentSocket.emit(SocketEvents.runTest, { sessionId: session.id, ...command.data });
+    const command: RunTestCommand = {
+      sessionId: session.id,
+      targetUrl: body.data.targetUrl,
+      persona: body.data.persona,
+      goal,
+      config,
+    };
+    activeRuns.set(session.id, agentSocket);
+    agentSocket.emit(SocketEvents.runStart, command);
     res.status(201).json(session);
   });
 
-  // Called by the runner. Unauthenticated until Phase 7 (API keys).
-  app.post('/api/ai/plan-step', async (req, res) => {
-    const { sessionId, htmlSnapshot, currentUrl, history, goal, persona } = req.body ?? {};
-    const next = await ai.planNextAction({
-      sessionId: typeof sessionId === 'string' ? sessionId : undefined,
-      htmlSnapshot: String(htmlSnapshot ?? ''),
-      currentUrl: String(currentUrl ?? ''),
-      history: Array.isArray(history) ? history : [],
-      goal: String(goal ?? ''),
-      persona: String(persona ?? ''),
-    });
-    res.json(next);
+  app.post('/api/sessions/:id/cancel', async (req, res) => {
+    const session = await prisma.testSession.findUnique({ where: { id: req.params.id } });
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    const runner = activeRuns.get(session.id);
+    if (session.status !== 'RUNNING' || !runner) {
+      res.status(409).json({ error: 'This run is not in progress.' });
+      return;
+    }
+    runner.emit(SocketEvents.runCancel, { sessionId: session.id });
+    res.status(202).json({ ok: true });
   });
 
-  app.post('/api/ai/heal-selector', async (req, res) => {
-    const { sessionId, failedSelector, htmlSnapshot, goal, persona } = req.body ?? {};
-    const healed = await ai.healSelector({
-      sessionId: typeof sessionId === 'string' ? sessionId : undefined,
-      failedSelector: String(failedSelector ?? ''),
-      htmlSnapshot: String(htmlSnapshot ?? ''),
-      goal: String(goal ?? ''),
-      persona: String(persona ?? ''),
-    });
-    res.json(healed);
+  /** Playwright trace upload from the runner (zip). */
+  app.put(
+    '/api/sessions/:id/trace',
+    express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '200mb' }),
+    async (req, res) => {
+      const session = await prisma.testSession.findUnique({ where: { id: String(req.params.id) } });
+      if (!session) {
+        res.status(404).json({ error: 'Session not found' });
+        return;
+      }
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        res.status(400).json({ error: 'Expected a zip body' });
+        return;
+      }
+      const dir = path.join(artifactsDir, session.id);
+      await fs.promises.mkdir(dir, { recursive: true });
+      await fs.promises.writeFile(path.join(dir, 'trace.zip'), req.body);
+      const traceUrl = `/artifacts/${session.id}/trace.zip`;
+      await prisma.testSession.update({ where: { id: session.id }, data: { traceUrl } });
+      pushUpdate(session.id, 'trace-ready', { traceUrl });
+      res.status(201).json({ traceUrl });
+    },
+  );
+
+  /** The agent's planner. Called by the runner once per step; keys stay on the server. */
+  app.post('/api/ai/next-action', async (req, res) => {
+    const parsed = NextActionRequest.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { kind: 'bad_request', message: parsed.error.message } });
+      return;
+    }
+    try {
+      res.json(await ai.nextAction(parsed.data));
+    } catch (err) {
+      const e = err instanceof LlmError ? err : new LlmError('unknown', String(err));
+      res.status(502).json({ error: { kind: e.kind, message: e.message } });
+    }
   });
 
   app.post('/api/sessions/:id/set-baseline', async (req, res) => {
@@ -417,11 +482,12 @@ export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
       '### 👻 GhostIQ Autonomous Test Report',
       '',
       `**Repo**: \`${repo}\` | **PR**: \`#${pr}\``,
-      `**Status**: ${icon} **${latest?.status ?? 'UNKNOWN'}**`,
+      `**Status**: ${icon} **${latest?.status ?? 'UNKNOWN'}**${latest?.endReason ? ` (${latest.endReason})` : ''}`,
       `**Target URL**: \`${latest?.targetUrl ?? 'N/A'}\``,
       `**Persona**: \`${latest?.persona ?? 'N/A'}\``,
+      latest?.summary ? `**Summary**: ${latest.summary}` : '',
       '',
-      '#### Summary of Test Run:',
+      '#### Steps',
       steps,
     ].join('\n');
 
@@ -441,11 +507,67 @@ export function createApp({ env, prisma, ai, llm }: AppDeps): GhostIqApp {
 
   // Express 5 forwards rejected promises from async handlers here.
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (isPayloadTooLarge(err)) {
+      res.status(413).json({ error: 'Payload too large' });
+      return;
+    }
     console.error('[http] unhandled error:', err);
     res.status(500).json({ error: 'Internal server error' });
   });
 
   return { app, server, io };
+}
+
+/** Stores raw requests and folds them into per-endpoint health. */
+async function recordNetwork(
+  prisma: PrismaClient,
+  projectId: string,
+  stepId: string,
+  requests: NetworkRequestRecord[],
+) {
+  for (const req of requests) {
+    await prisma.networkRequest.create({
+      data: {
+        stepId,
+        url: req.url,
+        method: req.method,
+        status: req.status,
+        latencyMs: req.latencyMs,
+      },
+    });
+
+    const url = normalizeEndpointUrl(req.url);
+    const isError = req.status >= 400 || req.status === 0;
+    const key = { projectId_url_method: { projectId, url, method: req.method } };
+    const existing = await prisma.endpointHealth.findUnique({ where: key });
+
+    if (existing) {
+      await prisma.endpointHealth.update({
+        where: { id: existing.id },
+        data: {
+          callCount: existing.callCount + 1,
+          errorCount: existing.errorCount + (isError ? 1 : 0),
+          avgLatencyMs: updateRunningAverage(
+            existing.avgLatencyMs,
+            existing.callCount,
+            req.latencyMs,
+          ),
+          lastCalled: new Date(),
+        },
+      });
+    } else {
+      await prisma.endpointHealth.create({
+        data: {
+          projectId,
+          url,
+          method: req.method,
+          callCount: 1,
+          errorCount: isError ? 1 : 0,
+          avgLatencyMs: req.latencyMs,
+        },
+      });
+    }
+  }
 }
 
 /** Aggregated LLM spend for a set of calls. `costUsd` excludes calls to unpriced models. */
@@ -475,6 +597,14 @@ export async function llmUsage(
     costUsd: totals._sum.costUsd ?? 0,
     latencyMs: totals._sum.latencyMs ?? 0,
   };
+}
+
+function isPayloadTooLarge(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { type?: string }).type === 'entity.too.large'
+  );
 }
 
 function logInvalid(event: string, error: { issues: unknown[] }) {
