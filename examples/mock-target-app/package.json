@@ -1,0 +1,16 @@
+{
+  "name": "@ghostiq/mock-target-app",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Playground app with deliberately seeded bugs, used for demos and benchmarks.",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.3.0"
+  }
+}

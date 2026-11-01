@@ -1,0 +1,16 @@
+packages:
+  - apps/*
+  - packages/*
+  - examples/*
+
+# Supply-chain safety: never install a version published less than 14 days ago.
+minimumReleaseAge: 20160
+
+# Only these dependencies may run install scripts.
+allowBuilds:
+  '@prisma/engines': true
+  better-sqlite3: true
+  esbuild: true
+  prisma: true
+  '@google/genai': false
+  protobufjs: false

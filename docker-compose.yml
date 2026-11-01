@@ -1,0 +1,48 @@
+# One-command local stack:  docker compose up --build
+#   Dashboard + API : http://localhost:3001
+#   Demo target app : http://localhost:3000  (from inside the runner use http://mock-app:3000)
+#
+# Optional: put GHOSTIQ_LLM_API_KEY=... in a .env file next to this file to use a real model;
+# without it the server runs in clearly labelled demo mode.
+
+services:
+  server:
+    build:
+      context: .
+      target: server
+    image: ghostiq/server:dev
+    ports:
+      - '3001:3001'
+    environment:
+      GHOSTIQ_LLM_PROVIDER: ${GHOSTIQ_LLM_PROVIDER:-gemini}
+      GHOSTIQ_LLM_MODEL: ${GHOSTIQ_LLM_MODEL:-gemini-3.5-flash-lite}
+      GHOSTIQ_LLM_API_KEY: ${GHOSTIQ_LLM_API_KEY:-}
+    volumes:
+      - ghostiq-data:/data
+    restart: unless-stopped
+
+  runner:
+    build:
+      context: .
+      target: runner
+    image: ghostiq/runner:dev
+    environment:
+      GHOSTIQ_SERVER_URL: http://server:3001
+      GHOSTIQ_PROJECT_ID: ${GHOSTIQ_PROJECT_ID:-local-app-test-project-id}
+    depends_on:
+      server:
+        condition: service_healthy
+    ipc: host # recommended by Playwright for Chromium stability
+    restart: unless-stopped
+
+  mock-app:
+    build:
+      context: .
+      target: mock-app
+    image: ghostiq/mock-app:dev
+    ports:
+      - '3000:3000'
+    restart: unless-stopped
+
+volumes:
+  ghostiq-data:
