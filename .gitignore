@@ -38,3 +38,7 @@ run-claude.ps1
 Thumbs.db
 .vscode/
 .idea/
+
+# ghostiq run output (default report dir)
+ghostiq-report/
+evals/cli-e2e/

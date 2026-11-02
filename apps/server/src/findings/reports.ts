@@ -24,6 +24,10 @@ export interface FindingView {
   repro: string[];
   firstSeenAt: string;
   lastSeenAt: string;
+  /** Stable identity across databases (type|route|rule): used to de-duplicate GitHub issues. */
+  fingerprint?: string;
+  /** The run where this finding first appeared (CI gating on "new in this run"). */
+  firstSessionId?: string;
 }
 
 export interface ReportInput {

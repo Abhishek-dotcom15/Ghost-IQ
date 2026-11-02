@@ -1,0 +1,46 @@
+name: GhostIQ self-test
+
+# Dogfooding: every pull request runs the GhostIQ Action from this repository against the
+# bundled demo shop and gets a GhostIQ comment. The shop is full of planted bugs, so the
+# gate is off (fail-on: none); the comment and the report artifact are the point.
+on:
+  pull_request:
+
+concurrency:
+  group: ghostiq-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ghostiq:
+    name: Personas explore the demo shop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Start the app under test (demo shop)
+        run: |
+          node examples/mock-target-app/server.js > mock-app.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:3000 > /dev/null && exit 0; sleep 1; done
+          cat mock-app.log; exit 1
+
+      - name: GhostIQ
+        uses: ./
+        with:
+          target: http://localhost:3000
+          personas: happy-path,form-stress-tester
+          goal: Log in to the shop.
+          max-steps: 15
+          fail-on: none
+          # Demo mode unless a key is configured for the repository.
+          llm-provider: ${{ secrets.GEMINI_API_KEY != '' && 'gemini' || '' }}
+          llm-api-key: ${{ secrets.GEMINI_API_KEY }}

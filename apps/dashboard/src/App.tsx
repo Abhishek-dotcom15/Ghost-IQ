@@ -49,7 +49,7 @@ export default function App() {
     | 'endpoints'
     | 'personas'
     | 'settings'
-  >('dashboard');
+  >(() => (new URLSearchParams(window.location.search).has('session') ? 'sessions' : 'dashboard'));
   const [newProjectName, setNewProjectName] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
 

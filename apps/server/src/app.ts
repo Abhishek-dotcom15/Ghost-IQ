@@ -27,6 +27,7 @@ import { registerExportRoutes } from './export/routes.js';
 import { registerAnalyticsRoutes } from './analytics/routes.js';
 import { updateRunningAverage } from './lib/flakiness.js';
 import { ReplayService, registerReplayRoutes } from './replay/service.js';
+import { buildPayload, sendWebhook } from './notify/webhook.js';
 import { describeLlm, type LlmRuntime } from './llm.js';
 import type { AiService } from './services/ai.js';
 import {
@@ -304,6 +305,8 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
         });
         if (runLevel.length) announceFindings(session.id, session.projectId, runLevel);
 
+        if (env.GHOSTIQ_WEBHOOK_URL) void notifyRunCompleted(session.id);
+
         // A failed replay already says what diverged; no model call needed.
         if (data.status === 'FAILED' && session.mode !== 'replay') void runDiagnostics(session.id);
         pushUpdate(session.id, 'session-completed', data);
@@ -312,6 +315,35 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
       }
     });
   });
+
+  /** Outbound notification (generic JSON or Slack). Failures are logged, never thrown. */
+  async function notifyRunCompleted(sessionId: string) {
+    try {
+      const session = await prisma.testSession.findUnique({
+        where: { id: sessionId },
+        include: { project: { select: { id: true, name: true } } },
+      });
+      if (!session || !env.GHOSTIQ_WEBHOOK_URL) return;
+      const rows = await prisma.finding.findMany({
+        where: { occurrences: { some: { sessionId } }, status: { in: ['open', 'confirmed'] } },
+        select: { severity: true, title: true, route: true },
+      });
+      const result = await sendWebhook(
+        buildPayload({
+          project: session.project,
+          session,
+          findings: rows,
+          publicUrl: env.GHOSTIQ_PUBLIC_URL,
+        }),
+        { url: env.GHOSTIQ_WEBHOOK_URL, minSeverity: env.GHOSTIQ_WEBHOOK_MIN_SEVERITY },
+      );
+      if (result.error || (result.status && !result.sent)) {
+        console.error(`[webhook] delivery failed: ${result.error ?? `HTTP ${result.status}`}`);
+      }
+    } catch (err) {
+      console.error('[webhook] failed:', err);
+    }
+  }
 
   async function runDiagnostics(sessionId: string) {
     try {

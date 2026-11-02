@@ -35,6 +35,8 @@ interface FindingRow {
   reproJson: string;
   firstSeenAt: Date;
   lastSeenAt: Date;
+  fingerprint?: string;
+  firstSessionId?: string;
 }
 
 export function toView(row: FindingRow): FindingView {
@@ -55,6 +57,8 @@ export function toView(row: FindingRow): FindingView {
     repro: JSON.parse(row.reproJson) as string[],
     firstSeenAt: row.firstSeenAt.toISOString(),
     lastSeenAt: row.lastSeenAt.toISOString(),
+    fingerprint: row.fingerprint,
+    firstSessionId: row.firstSessionId,
   };
 }
 
@@ -96,12 +100,14 @@ export function registerFindingRoutes(app: Express, prisma: PrismaClient) {
     const status = list(req.query.status, FINDING_STATUSES);
     const severity = list(req.query.severity, SEVERITIES);
     const type = list(req.query.type, FINDING_TYPES);
+    const sessions = idList(req.query.sessions);
     const rows = await prisma.finding.findMany({
       where: {
         projectId: req.params.id,
         ...(status ? { status: { in: status } } : {}),
         ...(severity ? { severity: { in: severity } } : {}),
         ...(type ? { type: { in: type } } : {}),
+        ...(sessions ? { occurrences: { some: { sessionId: { in: sessions } } } } : {}),
       },
     });
     let findings = rows.map(toView);
@@ -193,8 +199,12 @@ export function registerFindingRoutes(app: Express, prisma: PrismaClient) {
     send(res, report, `ghostiq-run-${session.id.slice(0, 8)}`);
   });
 
-  /** Open and confirmed findings for the whole project (dismissed and fixed are excluded). */
+  /**
+   * Open and confirmed findings for the whole project (dismissed and fixed are excluded).
+   * `?sessions=a,b` narrows it to findings that occurred in those runs (one CI job).
+   */
   app.get('/api/projects/:id/report', async (req, res) => {
+    const sessions = idList(req.query.sessions);
     const format = parseFormat(req.query.format);
     if (!format) {
       res.status(400).json({ error: `format must be one of ${REPORT_FORMATS.join(', ')}` });
@@ -209,7 +219,11 @@ export function registerFindingRoutes(app: Express, prisma: PrismaClient) {
       return;
     }
     const rows = await prisma.finding.findMany({
-      where: { projectId: project.id, status: { in: ['open', 'confirmed'] } },
+      where: {
+        projectId: project.id,
+        status: { in: ['open', 'confirmed'] },
+        ...(sessions ? { occurrences: { some: { sessionId: { in: sessions } } } } : {}),
+      },
     });
     const report = renderReport(
       {
@@ -222,6 +236,16 @@ export function registerFindingRoutes(app: Express, prisma: PrismaClient) {
     );
     send(res, report, `ghostiq-${project.id.slice(0, 8)}`);
   });
+}
+
+/** "a,b,c" -> ids (max 100), or undefined when absent. */
+function idList(value: unknown): string[] | undefined {
+  if (typeof value !== 'string' || !value) return undefined;
+  return value
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean)
+    .slice(0, 100);
 }
 
 function parseFormat(value: unknown): ReportFormat | null {

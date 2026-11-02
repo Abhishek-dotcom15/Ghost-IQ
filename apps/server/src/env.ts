@@ -21,6 +21,12 @@ const EnvSchema = z.object({
   GHOSTIQ_ARTIFACT_DIR: z.string().default('public/artifacts'),
   /** Optional folder of persona YAML files, loaded at boot alongside the built-ins. */
   GHOSTIQ_PERSONAS_DIR: optional(z.string()),
+  /** Notified when a run finishes (JSON, or a Slack message for hooks.slack.com URLs). */
+  GHOSTIQ_WEBHOOK_URL: optional(z.url()),
+  /** Only notify for runs with findings at or above this severity (default: every run). */
+  GHOSTIQ_WEBHOOK_MIN_SEVERITY: optional(z.enum(['critical', 'high', 'medium', 'low', 'info'])),
+  /** Public dashboard URL used in notifications, e.g. https://ghostiq.example.com */
+  GHOSTIQ_PUBLIC_URL: optional(z.url()),
 
   // ---- LLM (see packages/llm). Unset provider + no key => demo mode.
   GHOSTIQ_LLM_PROVIDER: optional(z.enum(['gemini', 'claude', 'openai', 'ollama', 'mock'])),

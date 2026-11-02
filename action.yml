@@ -1,0 +1,173 @@
+name: GhostIQ
+description: >-
+  Persona-driven exploratory testing of a running web app. Virtual users explore it, findings
+  are posted as a PR comment and uploaded as HTML / JUnit / SARIF reports, and the step fails
+  on findings at or above a severity.
+author: GhostIQ
+branding:
+  icon: eye
+  color: purple
+
+inputs:
+  target:
+    description: URL of the running app under test (start it in an earlier step).
+    required: true
+  personas:
+    description: Comma-separated persona ids, run one after another.
+    default: happy-path
+  goal:
+    description: "Goal for every persona (default: each persona's own goal)."
+    default: ''
+  max-steps:
+    description: Actions per persona.
+    default: '30'
+  fail-on:
+    description: 'Fail on findings at or above: critical | high | medium | low | info | none.'
+    default: high
+  new-only:
+    description: Only count findings first seen in this job (useful with a long-lived server).
+    default: 'false'
+  config:
+    description: Path to a ghostiq.config.{ts,mjs,js,json} (found automatically in the repo root).
+    default: ''
+  server:
+    description: Existing GhostIQ server URL. Empty = start a temporary server inside the job.
+    default: ''
+  report-dir:
+    description: Where reports are written (relative to the workspace).
+    default: ghostiq-report
+  artifact-name:
+    description: Name of the uploaded report artifact ('' to skip the upload).
+    default: ghostiq-report
+  comment:
+    description: Post (and keep updating) one summary comment on the pull request.
+    default: 'true'
+  fail:
+    description: Fail this step when the gate fails. Set to false to only report.
+    default: 'true'
+  github-token:
+    description: Token for the PR comment (needs pull-requests write).
+    default: ${{ github.token }}
+  llm-provider:
+    description: 'gemini | claude | openai | ollama. Empty with no key = demo mode (scripted, no AI).'
+    default: ''
+  llm-model:
+    description: Model id (provider default when empty).
+    default: ''
+  llm-api-key:
+    description: API key for the provider (pass a secret).
+    default: ''
+
+outputs:
+  exit-code:
+    description: 0 pass, 1 gate failed, 2 usage error, 3 GhostIQ could not run.
+    value: ${{ steps.run.outputs.code }}
+  findings:
+    description: Findings in these runs (dismissed excluded).
+    value: ${{ steps.run.outputs.findings }}
+  failing-findings:
+    description: Findings at or above fail-on.
+    value: ${{ steps.run.outputs.failing-findings }}
+  report-dir:
+    description: Absolute path of the reports.
+    value: ${{ steps.run.outputs.report-dir }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 24
+
+    - name: Install GhostIQ
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        command -v pnpm >/dev/null 2>&1 || npm install -g pnpm@12.14.0
+        pnpm install --frozen-lockfile
+        pnpm --filter "./packages/**" build
+        pnpm --filter @ghostiq/server build
+        pnpm --filter @ghostiq/runner build
+        pnpm --filter @ghostiq/runner exec playwright install --with-deps chromium
+
+    - name: Run GhostIQ
+      id: run
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        # Inputs go through the environment, never into the script text.
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_PERSONAS: ${{ inputs.personas }}
+        INPUT_GOAL: ${{ inputs.goal }}
+        INPUT_MAX_STEPS: ${{ inputs.max-steps }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_NEW_ONLY: ${{ inputs.new-only }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_SERVER: ${{ inputs.server }}
+        INPUT_REPORT_DIR: ${{ inputs.report-dir }}
+        GHOSTIQ_LLM_PROVIDER: ${{ inputs.llm-provider }}
+        GHOSTIQ_LLM_MODEL: ${{ inputs.llm-model }}
+        GHOSTIQ_LLM_API_KEY: ${{ inputs.llm-api-key }}
+        GHOSTIQ_LLM_STRICT: 'true'
+      run: |
+        args=(run --target "$INPUT_TARGET" --personas "$INPUT_PERSONAS" --max-steps "$INPUT_MAX_STEPS"
+              --fail-on "$INPUT_FAIL_ON" --report-dir "$INPUT_REPORT_DIR")
+        [ -n "$INPUT_GOAL" ] && args+=(--goal "$INPUT_GOAL")
+        [ -n "$INPUT_CONFIG" ] && args+=(--config "$INPUT_CONFIG")
+        [ -n "$INPUT_SERVER" ] && args+=(--server "$INPUT_SERVER")
+        [ "$INPUT_NEW_ONLY" = "true" ] && args+=(--new-only)
+        set +e
+        node "$GITHUB_ACTION_PATH/apps/runner/dist/cli.js" "${args[@]}"
+        code=$?
+        set -e
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+        exit 0
+
+    - name: Upload GhostIQ reports
+      if: always() && inputs.artifact-name != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.report-dir }}
+        if-no-files-found: ignore
+
+    - name: Comment on the pull request
+      if: always() && inputs.comment == 'true' && github.event_name == 'pull_request' && steps.run.outputs.summary-file != ''
+      uses: actions/github-script@v7
+      env:
+        SUMMARY_FILE: ${{ steps.run.outputs.summary-file }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          const marker = '<!-- ghostiq-report -->';
+          const body = fs.readFileSync(process.env.SUMMARY_FILE, 'utf8');
+          const { owner, repo } = context.repo;
+          const issue_number = context.payload.pull_request.number;
+          try {
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+            const mine = comments.find((c) => c.body && c.body.includes(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+              core.info(`Updated GhostIQ comment ${mine.html_url}`);
+            } else {
+              const { data } = await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              core.info(`Posted GhostIQ comment ${data.html_url}`);
+            }
+          } catch (err) {
+            // Pull requests from forks get a read-only token: report, do not fail.
+            core.warning(`Could not comment on the pull request: ${err.message}`);
+          }
+
+    - name: GhostIQ gate
+      if: always() && inputs.fail == 'true' && steps.run.outputs.code != '0'
+      shell: bash
+      env:
+        CODE: ${{ steps.run.outputs.code }}
+      run: |
+        case "$CODE" in
+          1) echo "::error title=GhostIQ::Findings at or above the threshold (see the PR comment or the job summary)";;
+          2) echo "::error title=GhostIQ::Invalid GhostIQ configuration (see the Run GhostIQ step)";;
+          *) echo "::error title=GhostIQ::GhostIQ could not complete the runs (exit ${CODE:-unknown})";;
+        esac
+        exit "${CODE:-3}"

@@ -1,6 +1,8 @@
 # GhostIQ — Build Plan (v2)
 
-Status: Phases 0-5 complete (v0.7.0). Next: Phase 6 (CLI, GitHub Action, distribution). Last updated: 2026-11-02.
+Status: Phases 0-6 complete (v0.8.0). Next: Phase 7 (hardening and deploy). Last updated: 2026-11-02.
+
+**Phase 6 result:** `ghostiq` CLI (`run`, `replay`, `export`, `issues`, `mcp`, `agent`, `init`) with stable exit codes (0/1/2/3) and `ghostiq.config.{ts,mjs,js,json}`; `run` starts a throwaway server and an in-process runner when no `--server` is given. Composite GitHub Action (`action.yml`): sticky PR comment, report artifact, gate; dogfooded on this repo's PRs (`.github/workflows/ghostiq.yml`). Idempotent GitHub issue export (fingerprint markers), webhooks with Slack formatting, MCP server (6 tools), GHCR + GitHub release workflow. Verified locally by `scripts/cli-e2e.mjs` (all exit codes, reports, GitHub outputs, export, replay, issues dry run, MCP client calls). Done-when ("a PR gets a GhostIQ comment") is verified on the first pull request after push. Deferred: npm package (needs bundling of workspace packages), diff-aware runs, a separate demo repository.
 
 **Phase 5 result:** recorded runs replay with zero LLM calls and an end-state check; the heal ladder (exact → fuzzy same-role ≥0.75 → model ≥0.85 with compatible role) queues HealEvents for review; approved heals flow into exports and later replays; exports pass in plain Playwright (verified end to end in `scripts/smoke.mjs`, including a renamed login button); flakiness is computed from replays only; analytics API + dashboard. Deferred: the vision-LLM judge (again: it needs labelled data from triage to be measured honestly), stored alternate locators as the ladder's first rung, disambiguating repeated identical controls, and a persistent replay queue.
 

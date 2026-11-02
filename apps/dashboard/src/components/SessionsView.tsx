@@ -72,7 +72,10 @@ interface SessionDetail {
 
 export default function SessionsView({ project, socket }: SessionsViewProps) {
   const [sessions, setSessions] = useState<any[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  // Deep link from notifications and CI summaries: /?session=<id>
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() =>
+    new URLSearchParams(window.location.search).get('session'),
+  );
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
   const [baselineDetail, setBaselineDetail] = useState<SessionDetail | null>(null);
   const [expandedSteps, setExpandedSteps] = useState<Record<number, boolean>>({});

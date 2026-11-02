@@ -5,6 +5,7 @@
   "description": "GhostIQ runner agent: drives Playwright where the app under test is reachable.",
   "type": "module",
   "bin": {
+    "ghostiq": "./dist/cli.js",
     "ghostiq-agent": "./dist/index.js"
   },
   "main": "./dist/index.js",
@@ -21,10 +22,12 @@
     "@ghostiq/core": "workspace:*",
     "@ghostiq/personas": "workspace:*",
     "@ghostiq/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "commander": "^15.0.0",
     "dotenv": "^18.0.8",
     "playwright": "^1.64.1",
-    "socket.io-client": "^4.8.4"
+    "socket.io-client": "^4.8.4",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "tsx": "^4.23.15"

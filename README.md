@@ -9,14 +9,33 @@
 different user personas through your web app (localhost, staging or production), watches
 network traffic, console errors and accessibility, and reports what broke with evidence.
 
-> **Status: v0.7 — replay, healing, export, analytics.** Phases 0–5 of [the build plan](docs/PLAN.md)
+> **Status: v0.8 — CI and distribution.** Phases 0–6 of [the build plan](docs/PLAN.md)
 > are done: an agent core with guardrails, eight personas as YAML, 15 oracles that turn what the
 > agent sees into deduplicated findings, and now **explore once, replay forever**: a successful run
 > replays without an LLM, heals renamed controls (with human review), exports as a plain Playwright
 > test, and measures real flakiness. On the bundled seeded-bug benchmark, all eight personas
 > together find **29 of 33 bugs (94% of the detectable ones) at 90% precision** — measured in demo
 > mode, see [docs/EVALUATION.md](docs/EVALUATION.md) for what that does and does not mean.
-> Next: CLI and GitHub Action (Phase 6).
+> **v0.8 adds CI:** a `ghostiq` CLI with exit codes, a GitHub Action that comments on pull
+> requests, GitHub issue export, Slack/webhook notifications and an MCP server for coding agents.
+> Next: hardening and hosted deploy (Phase 7).
+
+## CI
+
+```yaml
+- uses: Abhishek-dotcom15/Ghost-IQ@v0.8.0
+  with:
+    target: http://localhost:3000
+    personas: happy-path,form-stress-tester
+    fail-on: high
+    llm-provider: gemini
+    llm-api-key: ${{ secrets.GEMINI_API_KEY }}
+```
+
+Each pull request gets one GhostIQ comment (per-persona results, findings by severity),
+HTML/JUnit/SARIF reports as an artifact, and a pass/fail gate. The same thing runs anywhere
+with `ghostiq run -t <url> --fail-on high` (exit 0 pass, 1 findings, 2 config, 3 GhostIQ could
+not run). Coding agents can use GhostIQ through `ghostiq mcp`. See [docs/CI.md](docs/CI.md).
 
 ## Explore once, replay forever
 
@@ -156,8 +175,10 @@ packages/
 examples/
   mock-target-app/   demo shop with 33 labelled bugs (bugs.json)
 scripts/smoke.mjs    end-to-end smoke test
-docs/                PLAN.md, ARCHITECTURE.md, PERSONAS.md, EVALUATION.md
+docs/                PLAN.md, ARCHITECTURE.md, PERSONAS.md, EVALUATION.md, CI.md
 scripts/bench-bugs.mjs  seeded-bug benchmark (recall / precision against bugs.json)
+scripts/cli-e2e.mjs     end-to-end check of the ghostiq CLI and MCP server
+action.yml           GitHub Action (composite)
 ```
 
 ## Development commands

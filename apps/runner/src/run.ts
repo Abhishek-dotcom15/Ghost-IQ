@@ -13,6 +13,8 @@ export interface RunnerOptions {
   headless: boolean;
   trace: boolean;
   storageStatePath?: string;
+  /** Per-run log lines (default: stdout). The CLI silences them and prints its own progress. */
+  log?: (msg: string) => void;
 }
 
 /** Executes one run end to end: browser, agent loop, events, trace upload. */
@@ -22,7 +24,8 @@ export async function executeRun(
   options: RunnerOptions,
   signal: AbortSignal,
 ): Promise<RunOutcome> {
-  const log = (msg: string) => console.log(`[${command.sessionId.slice(0, 8)}] ${msg}`);
+  const out = options.log ?? ((m: string) => console.log(m));
+  const log = (msg: string) => out(`[${command.sessionId.slice(0, 8)}] ${msg}`);
   log(
     command.replay
       ? `replay of ${command.replay.sourceSessionId.slice(0, 8)}: ${command.replay.steps.length} step(s) -> ${command.targetUrl}`
