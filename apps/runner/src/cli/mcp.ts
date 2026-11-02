@@ -85,7 +85,7 @@ export async function startMcpServer(options: McpOptions): Promise<void> {
     'ghostiq_list_personas',
     {
       description:
-        'List GhostIQ personas (virtual users such as happy-path, form-stress-tester, impatient-user, mobile-slow-3g). Use their ids with ghostiq_run.',
+        'List GhostIQ personas (virtual users such as happy-path, form-stress-tester, impatient-user, mobile-slow-network). Use their ids with ghostiq_run.',
       inputSchema: {},
     },
     async () => {

@@ -50,6 +50,11 @@ body {
   overflow-x: hidden;
 }
 
+/* Buttons do not inherit text colour by default (dark text on the dark theme). */
+button {
+  color: inherit;
+}
+
 /* Scrollbar Customization */
 ::-webkit-scrollbar {
   width: 8px;

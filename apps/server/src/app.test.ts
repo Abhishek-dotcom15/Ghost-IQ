@@ -158,6 +158,42 @@ describe('GhostIQ API', () => {
     expect((await request(app).get('/api/nope')).status).toBe(404);
     expect((await request(app).get('/api/sessions/missing')).status).toBe(404);
   });
+
+  it('answers client mistakes with 4xx, not 500', async () => {
+    const badJson = await request(app)
+      .post('/api/sessions')
+      .set('content-type', 'application/json')
+      .send('{not json');
+    expect(badJson.status).toBe(400);
+    expect(badJson.body).toEqual({ error: 'Bad request' });
+    expect((await request(app).get('/screenshots/missing.png')).status).toBe(404);
+    expect((await request(app).get('/artifacts/missing/trace.zip')).status).toBe(404);
+  });
+
+  it('keeps API 404s as JSON when the dashboard is served (SPA fallback)', async () => {
+    const dashboardDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostiq-dash-'));
+    fs.writeFileSync(
+      path.join(dashboardDir, 'index.html'),
+      '<!doctype html><title>GhostIQ</title>',
+    );
+    const withDashboard = createApp({
+      env: { ...env, GHOSTIQ_DASHBOARD_DIR: dashboardDir },
+      prisma,
+      ai: new AiService(createLlmRuntime(env, prisma).client),
+      llm: createLlmRuntime(env, prisma),
+      personas: new PersonaRegistry(prisma),
+    });
+    try {
+      const api = await request(withDashboard.app).get('/api/nope');
+      expect(api.status).toBe(404);
+      expect(api.body).toEqual({ error: 'Not found' });
+      const page = await request(withDashboard.app).get('/sessions/anything');
+      expect(page.status).toBe(200);
+      expect(page.text).toContain('<title>GhostIQ</title>');
+    } finally {
+      await withDashboard.io.close();
+    }
+  });
 });
 
 describe('buildRunConfig', () => {

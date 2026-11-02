@@ -714,6 +714,11 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
     res.json({ success: true, comment, project });
   });
 
+  // Unknown API routes are JSON 404s, never the dashboard's index.html.
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ error: 'Not found' });
+  });
+
   // Production: serve the built dashboard from the same origin.
   if (env.GHOSTIQ_DASHBOARD_DIR && fs.existsSync(env.GHOSTIQ_DASHBOARD_DIR)) {
     const dashboardDir = path.resolve(env.GHOSTIQ_DASHBOARD_DIR);
@@ -721,14 +726,17 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
     app.get('/{*splat}', (_req, res) => res.sendFile(path.join(dashboardDir, 'index.html')));
   }
 
-  app.use('/api', (_req, res) => {
-    res.status(404).json({ error: 'Not found' });
-  });
-
   // Express 5 forwards rejected promises from async handlers here.
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (isPayloadTooLarge(err)) {
       res.status(413).json({ error: 'Payload too large' });
+      return;
+    }
+    // Client errors raised by middleware: malformed JSON (400), missing static file (404), ...
+    const status = clientErrorStatus(err);
+    if (status) {
+      const message = { 403: 'Forbidden', 404: 'Not found' }[status] ?? 'Bad request';
+      res.status(status).json({ error: message });
       return;
     }
     console.error('[http] unhandled error:', err);
@@ -825,6 +833,16 @@ function isPayloadTooLarge(err: unknown): boolean {
     err !== null &&
     (err as { type?: string }).type === 'entity.too.large'
   );
+}
+
+/** 4xx status carried by a middleware error (body-parser, serve-static), if any. */
+export function clientErrorStatus(err: unknown): number | null {
+  if (typeof err !== 'object' || err === null) return null;
+  const e = err as { status?: unknown; statusCode?: unknown; code?: unknown };
+  const status = typeof e.status === 'number' ? e.status : e.statusCode;
+  if (typeof status === 'number' && status >= 400 && status < 500) return status;
+  if (e.code === 'ENOENT') return 404;
+  return null;
 }
 
 function logInvalid(event: string, error: { issues: unknown[] }) {

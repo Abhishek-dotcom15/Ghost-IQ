@@ -178,6 +178,8 @@ scripts/smoke.mjs    end-to-end smoke test
 docs/                PLAN.md, ARCHITECTURE.md, PERSONAS.md, EVALUATION.md, CI.md
 scripts/bench-bugs.mjs  seeded-bug benchmark (recall / precision against bugs.json)
 scripts/cli-e2e.mjs     end-to-end check of the ghostiq CLI and MCP server
+scripts/check-dashboard.mjs  every dashboard page in a browser: console errors, failed requests, broken links
+scripts/check-links.mjs      Markdown links and anchors (part of pnpm verify; --external also requests URLs)
 action.yml           GitHub Action (composite)
 ```
 

@@ -42,3 +42,4 @@ Thumbs.db
 # ghostiq run output (default report dir)
 ghostiq-report/
 evals/cli-e2e/
+evals/dashboard-check/

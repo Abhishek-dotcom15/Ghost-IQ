@@ -91,6 +91,9 @@ export default function FindingsView({ project, socket }: FindingsViewProps) {
               cursor: 'pointer',
               borderColor: severity === s ? SEVERITY_STYLE[s].color : undefined,
               textAlign: 'left',
+              // <button> does not inherit the page's text colour.
+              color: 'hsl(var(--text-primary))',
+              font: 'inherit',
             }}
             title={`Show only ${s}`}
           >

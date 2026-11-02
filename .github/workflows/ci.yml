@@ -49,13 +49,17 @@ jobs:
         run: node scripts/smoke.mjs
       - name: CLI end to end (run, gates and exit codes, export, replay, issues, MCP)
         run: node scripts/cli-e2e.mjs
+      - name: Dashboard in a browser (console errors, failed requests, broken links)
+        run: node scripts/check-dashboard.mjs
       - name: Oracle regression guard (seeded-bug benchmark, one persona)
         run: node scripts/bench-bugs.mjs --personas happy-path --no-visual --steps 80 --min-recall 0.6
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: benchmark-results
-          path: evals/results/
+          path: |
+            evals/results/
+            evals/dashboard-check/*.png
           if-no-files-found: ignore
 
   docker:

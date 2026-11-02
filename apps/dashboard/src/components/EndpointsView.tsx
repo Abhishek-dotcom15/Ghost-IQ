@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import type { Project } from '../App';
 import { AlertOctagon, CheckCircle2, BarChart2 } from 'lucide-react';
 import {
@@ -11,6 +11,18 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
+
+// Dark reference palette: series blue, and the "critical" status red for slow endpoints.
+const OK_COLOR = '#3987e5';
+const SLOW_COLOR = '#d03b3b';
+
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
+}
 
 interface EndpointsViewProps {
   project: Project;
@@ -67,7 +79,7 @@ export default function EndpointsView({ project }: EndpointsViewProps) {
   // Prepare chart data for API latencies
   const chartData = endpoints
     .map((e) => ({
-      name: `${e.method} ${e.url.split('/').pop() || '/'}`,
+      name: `${e.method} ${pathOf(e.url)}`,
       latency: Math.round(e.avgLatencyMs),
       errors: e.errorCount,
     }))
@@ -151,18 +163,17 @@ export default function EndpointsView({ project }: EndpointsViewProps) {
               <BarChart2 size={18} style={{ color: 'hsl(var(--accent-purple))' }} /> Average
               Response Latency (ms)
             </h3>
+            <p style={{ fontSize: '0.8rem', color: 'hsl(var(--text-muted))' }}>
+              <span style={{ color: SLOW_COLOR }}>■</span> above 800 ms (slow) ·{' '}
+              <span style={{ color: OK_COLOR }}>■</span> within budget
+            </p>
 
             <div style={{ width: '100%', height: '280px', marginTop: '1rem' }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis
-                    dataKey="name"
-                    stroke="hsl(var(--text-muted))"
-                    fontSize={11}
-                    tickLine={false}
-                  />
-                  <YAxis stroke="hsl(var(--text-muted))" fontSize={11} tickLine={false} unit="ms" />
+                  <XAxis dataKey="name" stroke="#898781" fontSize={11} tickLine={false} />
+                  <YAxis stroke="#898781" fontSize={11} tickLine={false} unit="ms" />
                   <Tooltip
                     contentStyle={{
                       background: 'hsl(var(--bg-secondary))',
@@ -171,16 +182,21 @@ export default function EndpointsView({ project }: EndpointsViewProps) {
                       borderRadius: 'var(--radius-sm)',
                     }}
                   />
-                  <Bar dataKey="latency" fill="hsl(var(--accent-purple))" radius={[4, 4, 0, 0]}>
-                    {chartData.map((entry, index) => {
-                      const isHigh = entry.latency > 800;
-                      return (
-                        <Cell
-                          key={`cell-${index}`}
-                          fill={isHigh ? 'hsl(var(--danger))' : 'hsl(var(--accent-purple))'}
-                        />
-                      );
-                    })}
+                  {/* SVG fill attributes cannot resolve CSS var(): concrete colours only. */}
+                  <Bar
+                    dataKey="latency"
+                    name="Average latency"
+                    fill={OK_COLOR}
+                    radius={[4, 4, 0, 0]}
+                    maxBarSize={36}
+                    isAnimationActive={false}
+                  >
+                    {chartData.map((entry, index) => (
+                      <Cell
+                        key={`cell-${index}`}
+                        fill={entry.latency > 800 ? SLOW_COLOR : OK_COLOR}
+                      />
+                    ))}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
