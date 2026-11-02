@@ -1,15 +1,88 @@
 import React, { useEffect, useState } from 'react';
 import type { Project } from '../App';
-import { PlayCircle, ShieldAlert, CheckCircle, Database, Network } from 'lucide-react';
+import {
+  PlayCircle,
+  ShieldAlert,
+  CheckCircle,
+  Database,
+  Network,
+  GitPullRequest,
+  type LucideIcon,
+} from 'lucide-react';
+import { useToast } from '../lib/toast';
+import ExplanationCard from './ExplanationCard';
 import { fetchPersonas, type PersonaView } from '../lib/personas';
 import { explainEndReason } from '@ghostiq/shared/explain';
 
 interface DashboardViewProps {
   project: Project;
   refresh: () => void;
+  /** Opens a run in Test Sessions. */
+  onOpenSession?: (sessionId: string) => void;
 }
 
-export default function DashboardView({ project, refresh }: DashboardViewProps) {
+function StatTile({
+  label,
+  value,
+  hint,
+  Icon,
+  tint,
+  color,
+  meter,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  Icon: LucideIcon;
+  tint: string;
+  color: string;
+  meter?: number;
+}) {
+  return (
+    <div
+      className="glass-card"
+      style={{ padding: '1.1rem 1.2rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: '0.8rem', color: 'hsl(var(--text-muted))', fontWeight: 520 }}>
+          {label}
+        </span>
+        <span
+          className="stat-icon"
+          style={{ background: tint, color, width: 32, height: 32, borderRadius: 9 }}
+        >
+          <Icon size={16} aria-hidden />
+        </span>
+      </div>
+      <div>
+        <div className="stat-value">{value}</div>
+        <div style={{ fontSize: '0.75rem', color: 'hsl(var(--text-muted))' }}>{hint}</div>
+      </div>
+      {meter !== undefined && (
+        <div
+          role="meter"
+          aria-label={`${label} ${value}`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(meter * 100)}
+          style={{
+            height: 4,
+            borderRadius: 4,
+            background: 'rgba(255,255,255,0.06)',
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{ width: `${meter * 100}%`, height: '100%', background: color, borderRadius: 4 }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function DashboardView({ project, refresh, onOpenSession }: DashboardViewProps) {
+  const notify = useToast();
   const [targetUrl, setTargetUrl] = useState('http://localhost:3000');
   const [personas, setPersonas] = useState<PersonaView[]>([]);
   const [personaId, setPersonaId] = useState('happy-path');
@@ -95,11 +168,15 @@ export default function DashboardView({ project, refresh }: DashboardViewProps) 
         throw new Error(data.error || 'Failed to start session');
       }
 
-      // Success - force reload project
       refresh();
-      alert(
-        `Test session started successfully! Go to the 'Test Sessions' tab to watch the live runner execution.`,
-      );
+      notify({
+        tone: 'success',
+        title: 'Run started',
+        body: `${selectedPersona?.name ?? personaId} is testing ${targetUrl}.`,
+        action: onOpenSession
+          ? { label: 'Watch it live', onClick: () => onOpenSession(data.id) }
+          : undefined,
+      });
     } catch (err) {
       setErrorMsg((err as Error).message);
     } finally {
@@ -109,108 +186,47 @@ export default function DashboardView({ project, refresh }: DashboardViewProps) 
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-      {/* Telemetry Metrics Cards */}
+      {/* Key numbers */}
       <section
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-          gap: '1.5rem',
+          gap: '1rem',
         }}
       >
-        <div
-          className="glass-card glow-card"
-          style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}
-        >
-          <div
-            style={{
-              background: 'rgba(139, 92, 246, 0.1)',
-              padding: '0.75rem',
-              borderRadius: 'var(--radius-sm)',
-              color: 'hsl(var(--accent-purple))',
-            }}
-          >
-            <PlayCircle size={24} />
-          </div>
-          <div>
-            <span
-              style={{ fontSize: '0.85rem', color: 'hsl(var(--text-muted))', display: 'block' }}
-            >
-              Total Test Runs
-            </span>
-            <span style={{ fontFamily: 'var(--font-title)', fontWeight: 800, fontSize: '1.75rem' }}>
-              {totalRuns}
-            </span>
-          </div>
-        </div>
-
-        <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <div
-            style={{
-              background: 'rgba(17, 185, 129, 0.1)',
-              padding: '0.75rem',
-              borderRadius: 'var(--radius-sm)',
-              color: 'hsl(var(--success))',
-            }}
-          >
-            <CheckCircle size={24} />
-          </div>
-          <div>
-            <span
-              style={{ fontSize: '0.85rem', color: 'hsl(var(--text-muted))', display: 'block' }}
-            >
-              Pass Rate
-            </span>
-            <span style={{ fontFamily: 'var(--font-title)', fontWeight: 800, fontSize: '1.75rem' }}>
-              {passRate}%
-            </span>
-          </div>
-        </div>
-
-        <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <div
-            style={{
-              background: 'rgba(244, 63, 94, 0.1)',
-              padding: '0.75rem',
-              borderRadius: 'var(--radius-sm)',
-              color: 'hsl(var(--danger))',
-            }}
-          >
-            <ShieldAlert size={24} />
-          </div>
-          <div>
-            <span
-              style={{ fontSize: '0.85rem', color: 'hsl(var(--text-muted))', display: 'block' }}
-            >
-              Failed Sessions
-            </span>
-            <span style={{ fontFamily: 'var(--font-title)', fontWeight: 800, fontSize: '1.75rem' }}>
-              {failRuns}
-            </span>
-          </div>
-        </div>
-
-        <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <div
-            style={{
-              background: 'rgba(14, 165, 233, 0.1)',
-              padding: '0.75rem',
-              borderRadius: 'var(--radius-sm)',
-              color: 'hsl(var(--info))',
-            }}
-          >
-            <Database size={24} />
-          </div>
-          <div>
-            <span
-              style={{ fontSize: '0.85rem', color: 'hsl(var(--text-muted))', display: 'block' }}
-            >
-              Discovered Routes
-            </span>
-            <span style={{ fontFamily: 'var(--font-title)', fontWeight: 800, fontSize: '1.75rem' }}>
-              {project._count?.endpoints || 0}
-            </span>
-          </div>
-        </div>
+        <StatTile
+          label="Total Test Runs"
+          value={String(totalRuns)}
+          hint={project.stats?.running ? `${project.stats.running} running now` : 'all time'}
+          Icon={PlayCircle}
+          tint="var(--accent-soft)"
+          color="hsl(var(--accent-purple))"
+        />
+        <StatTile
+          label="Pass Rate"
+          value={`${passRate}%`}
+          hint={`${successRuns} of ${finished} finished runs`}
+          Icon={CheckCircle}
+          tint="rgba(45, 212, 160, 0.12)"
+          color="hsl(var(--success))"
+          meter={finished ? successRuns / finished : undefined}
+        />
+        <StatTile
+          label="Failed Sessions"
+          value={String(failRuns)}
+          hint="each explains why it stopped"
+          Icon={ShieldAlert}
+          tint="rgba(244, 80, 110, 0.12)"
+          color="hsl(var(--danger))"
+        />
+        <StatTile
+          label="Discovered Routes"
+          value={String(project._count?.endpoints || 0)}
+          hint="API endpoints observed"
+          Icon={Database}
+          tint="rgba(56, 189, 248, 0.12)"
+          color="hsl(var(--info))"
+        />
       </section>
 
       <div
@@ -235,24 +251,20 @@ export default function DashboardView({ project, refresh }: DashboardViewProps) 
               gap: '0.5rem',
             }}
           >
-            <Network size={18} style={{ color: 'hsl(var(--accent-purple))' }} /> Trigger Autonomous
-            Tester
+            <Network size={18} style={{ color: 'hsl(var(--accent-purple))' }} /> Launch a test run
           </h3>
 
           {!project.agentOnline && (
-            <div
-              style={{
-                background: 'rgba(244, 63, 94, 0.08)',
-                border: '1px solid rgba(244, 63, 94, 0.15)',
-                padding: '0.75rem 1rem',
-                borderRadius: 'var(--radius-sm)',
-                color: 'hsl(var(--danger))',
-                fontSize: '0.85rem',
+            <ExplanationCard
+              compact
+              explanation={{
+                tone: 'warning',
+                title: 'No runner connected',
+                detail:
+                  'Runs need a runner: the process that drives the browser on a machine that can reach your app.',
+                fix: `Start one in a terminal: ghostiq agent -k ${project.id} (from the GhostIQ folder: pnpm --filter @ghostiq/runner start -k ${project.id}).`,
               }}
-            >
-              ⚠️ <strong>Agent Offline</strong>: Please start the CLI agent in your terminal (using{' '}
-              <code>npx ghostiq-agent -k {project.id}</code>) to test local URLs.
-            </div>
+            />
           )}
 
           {errorMsg && (
@@ -398,7 +410,7 @@ export default function DashboardView({ project, refresh }: DashboardViewProps) 
         {/* GitHub Exporter Card */}
         <section
           className="glass-card"
-          style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1.5rem' }}
+          style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}
         >
           <h3
             style={{
@@ -409,7 +421,8 @@ export default function DashboardView({ project, refresh }: DashboardViewProps) 
               gap: '0.5rem',
             }}
           >
-            🐙 Run GhostIQ on every pull request
+            <GitPullRequest size={18} style={{ color: 'hsl(var(--accent-purple))' }} /> Run GhostIQ
+            on every pull request
           </h3>
           <p style={{ fontSize: '0.8rem', color: 'hsl(var(--text-muted))', lineHeight: '1.4' }}>
             Add the GhostIQ GitHub Action to your repository: each pull request gets one GhostIQ

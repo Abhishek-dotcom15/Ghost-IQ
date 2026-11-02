@@ -15,6 +15,7 @@ import {
 import type { Socket } from 'socket.io-client';
 import { formatUsd, parseIssues } from '../lib/format';
 import ReplayPanel from './ReplayPanel';
+import { useToast } from '../lib/toast';
 import ExplanationCard from './ExplanationCard';
 import { explainEndReason, explainStepError } from '@ghostiq/shared/explain';
 
@@ -88,6 +89,7 @@ interface SessionDetail {
 }
 
 export default function SessionsView({ project, socket }: SessionsViewProps) {
+  const notify = useToast();
   const [sessions, setSessions] = useState<any[]>([]);
   // Deep link from notifications and CI summaries: /?session=<id>
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() =>
@@ -184,15 +186,16 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
       const res = await fetch(`/api/sessions/${sessionDetail.id}/set-baseline`, {
         method: 'POST',
       });
-      if (res.ok) {
-        alert(
-          'This session has been set as the project baseline for this persona/URL configuration.',
-        );
-        fetchSessionDetail(sessionDetail.id);
-        fetchSessions();
-      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      notify({
+        tone: 'success',
+        title: 'Baseline set',
+        body: 'Later runs of this persona and URL are compared against these screenshots (Visual Regression).',
+      });
+      fetchSessionDetail(sessionDetail.id);
+      fetchSessions();
     } catch (e) {
-      console.error(e);
+      notify({ tone: 'error', title: 'Could not set the baseline', body: (e as Error).message });
     }
   };
 

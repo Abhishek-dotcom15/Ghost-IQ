@@ -24,7 +24,8 @@ interface AnalyticsViewProps {
 const INK = { primary: '#f0efec', secondary: '#c3c2b7', muted: '#898781' };
 const GRID = 'rgba(255,255,255,0.06)';
 const SERIES_1 = '#3987e5';
-const SURFACE = '#17161f';
+// Matches --surface-card: the 2px gap between stacked segments.
+const SURFACE = '#12141c';
 
 const muted = { fontSize: '0.8rem', color: 'hsl(var(--text-muted))' } as const;
 const title = {

@@ -13,7 +13,11 @@ import {
   ShieldCheck,
   LogIn,
   LogOut,
+  Copy,
+  FolderPlus,
+  type LucideIcon,
 } from 'lucide-react';
+import { useToast } from './lib/toast';
 import AccessView from './components/AccessView';
 import AnalyticsView from './components/AnalyticsView';
 import LoginView from './components/LoginView';
@@ -47,20 +51,86 @@ const socket = io({
   query: { role: 'dashboard' },
 });
 
+type View =
+  | 'dashboard'
+  | 'sessions'
+  | 'findings'
+  | 'analytics'
+  | 'heals'
+  | 'endpoints'
+  | 'personas'
+  | 'access'
+  | 'settings';
+
+/** Sidebar groups. Labels are also the buttons' accessible names. */
+const NAV: Array<{ label: string; items: Array<{ view: View; label: string; Icon: LucideIcon }> }> =
+  [
+    {
+      label: 'Testing',
+      items: [
+        { view: 'dashboard', label: 'Overview', Icon: LayoutDashboard },
+        { view: 'sessions', label: 'Test Sessions', Icon: PlayCircle },
+        { view: 'findings', label: 'Findings', Icon: Bug },
+        { view: 'heals', label: 'Heal Review', Icon: Wrench },
+      ],
+    },
+    {
+      label: 'Insights',
+      items: [
+        { view: 'analytics', label: 'Analytics', Icon: LineChart },
+        { view: 'endpoints', label: 'API Health', Icon: BarChart3 },
+      ],
+    },
+    {
+      label: 'Configure',
+      items: [
+        { view: 'personas', label: 'Personas Builder', Icon: Users },
+        { view: 'access', label: 'Access & Keys', Icon: ShieldCheck },
+        { view: 'settings', label: 'Settings', Icon: Settings },
+      ],
+    },
+  ];
+
+const PAGES: Record<View, { title: string; subtitle: string }> = {
+  dashboard: {
+    title: 'Overview',
+    subtitle: 'Launch personas against your app and follow what they find.',
+  },
+  sessions: {
+    title: 'Test Sessions',
+    subtitle: 'Every run step by step, with screenshots, replays and exports.',
+  },
+  findings: { title: 'Findings', subtitle: 'Deduplicated bugs with evidence, ranked by severity.' },
+  heals: {
+    title: 'Heal Review',
+    subtitle: 'Controls that changed since a recording: approve or reject the new locator.',
+  },
+  analytics: {
+    title: 'Analytics',
+    subtitle: 'Coverage, persona effectiveness, findings over time and cost.',
+  },
+  endpoints: {
+    title: 'API Health',
+    subtitle: 'Latency and errors of every endpoint the personas called.',
+  },
+  personas: {
+    title: 'Personas',
+    subtitle: 'Virtual users as YAML: inputs, pacing, devices and behaviours.',
+  },
+  access: {
+    title: 'Access & Keys',
+    subtitle: 'API keys for runners and CI, members, visibility and the audit log.',
+  },
+  settings: { title: 'Settings', subtitle: 'The AI model in use, its health and its spend.' },
+};
+
 export default function App() {
+  const notify = useToast();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [currentView, setCurrentView] = useState<
-    | 'dashboard'
-    | 'sessions'
-    | 'findings'
-    | 'analytics'
-    | 'heals'
-    | 'endpoints'
-    | 'personas'
-    | 'access'
-    | 'settings'
-  >(() => (new URLSearchParams(window.location.search).has('session') ? 'sessions' : 'dashboard'));
+  const [currentView, setCurrentView] = useState<View>(() =>
+    new URLSearchParams(window.location.search).has('session') ? 'sessions' : 'dashboard',
+  );
   const [newProjectName, setNewProjectName] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [me, setMe] = useState<Me | null>(null);
@@ -166,73 +236,75 @@ export default function App() {
     return <LoginView me={me} onSignedIn={() => window.location.reload()} />;
   }
 
+  const runnerCommand = selectedProject
+    ? `ghostiq agent -k ${selectedProject.id}${me?.authEnabled ? ' --api-key <key>' : ''}`
+    : '';
+  const copyRunnerCommand = async () => {
+    try {
+      await navigator.clipboard.writeText(runnerCommand);
+      notify({
+        tone: 'success',
+        title: 'Runner command copied',
+        body: 'Paste it into a terminal on the machine that can reach your app.',
+      });
+    } catch {
+      notify({ tone: 'warning', title: 'Could not copy', body: runnerCommand });
+    }
+  };
+  const page = PAGES[currentView];
+  const navGroups = NAV.map((g) => ({
+    ...g,
+    items: g.items.filter((i) => i.view !== 'access' || (me?.authEnabled && !anonymous)),
+  }));
+
   return (
-    <div
-      className="app-container"
-      style={{ display: 'flex', minHeight: '100vh', background: 'hsl(var(--bg-primary))' }}
-    >
-      {/* Sidebar Navigation */}
-      <aside
-        style={{
-          width: '260px',
-          borderRight: '1px solid var(--border-glass)',
-          background: 'hsl(var(--bg-secondary))',
-          padding: '1.75rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '2rem',
-        }}
-      >
-        {/* Brand Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <span style={{ fontSize: '2rem' }}>👻</span>
-          <div>
-            <h1
-              style={{
-                fontFamily: 'var(--font-title)',
-                fontWeight: 800,
-                fontSize: '1.35rem',
-                letterSpacing: '-0.5px',
-              }}
-            >
-              GhostIQ
-            </h1>
-            <span
-              style={{
-                fontSize: '0.7rem',
-                textTransform: 'uppercase',
-                color: 'hsl(var(--accent-purple))',
-                fontWeight: 700,
-                letterSpacing: '1px',
-              }}
-            >
+    <div className="app-container">
+      {/* Sidebar */}
+      <aside className="sidebar" aria-label="Main navigation">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', padding: '0 0.4rem' }}>
+          <div
+            aria-hidden
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 10,
+              display: 'grid',
+              placeItems: 'center',
+              fontSize: '1.15rem',
+              background: 'linear-gradient(135deg, hsl(248, 90%, 68%), hsl(199, 89%, 60%))',
+              boxShadow: '0 6px 18px -8px rgba(124,108,255,0.9)',
+              flexShrink: 0,
+            }}
+          >
+            👻
+          </div>
+          <div className="hide-narrow" style={{ lineHeight: 1.15 }}>
+            <h1 style={{ fontSize: '1.05rem', fontWeight: 700 }}>GhostIQ</h1>
+            <span style={{ fontSize: '0.72rem', color: 'hsl(var(--text-muted))' }}>
               Autonomous QA
             </span>
           </div>
         </div>
 
-        {/* Project Selector */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          <label
-            style={{
-              fontSize: '0.75rem',
-              fontWeight: 600,
-              color: 'hsl(var(--text-muted))',
-              textTransform: 'uppercase',
-            }}
-          >
-            Current Project
+        {/* Project switcher */}
+        <div
+          className="hide-narrow"
+          style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}
+        >
+          <label htmlFor="project-switcher" className="nav-label" style={{ padding: '0 0.3rem' }}>
+            Project
           </label>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', gap: '0.4rem' }}>
             <select
+              id="project-switcher"
               value={selectedProject?.id || ''}
               onChange={(e) => {
                 const proj = projects.find((p) => p.id === e.target.value);
                 if (proj) setSelectedProject(proj);
               }}
-              style={{ flex: 1, padding: '0.5rem', borderRadius: 'var(--radius-sm)' }}
+              style={{ flex: 1, minWidth: 0, padding: '0.5rem 0.6rem', fontSize: '0.85rem' }}
             >
-              {projects.length === 0 && <option value="">No Projects Configured</option>}
+              {projects.length === 0 && <option value="">No projects yet</option>}
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -244,126 +316,55 @@ export default function App() {
                 onClick={() => setShowAddModal(true)}
                 aria-label="New project"
                 title="New project"
-                style={{
-                  width: '38px',
-                  height: '38px',
-                  background: 'rgba(255,255,255,0.05)',
-                  border: '1px solid var(--border-glass)',
-                  borderRadius: 'var(--radius-sm)',
-                  color: '#fff',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  transition: 'var(--transition-smooth)',
-                }}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)')
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)')
-                }
+                className="btn btn-secondary"
+                style={{ padding: '0 0.6rem' }}
               >
-                <Plus size={18} />
+                <Plus size={16} />
               </button>
             )}
           </div>
         </div>
 
-        {/* Nav Links */}
-        <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', flex: 1 }}>
-          <button
-            onClick={() => setCurrentView('dashboard')}
-            className={`btn ${currentView === 'dashboard' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ justifyContent: 'flex-start', width: '100%' }}
-          >
-            <LayoutDashboard size={18} /> Overview
-          </button>
-
-          <button
-            onClick={() => setCurrentView('sessions')}
-            className={`btn ${currentView === 'sessions' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ justifyContent: 'flex-start', width: '100%' }}
-          >
-            <PlayCircle size={18} /> Test Sessions
-          </button>
-
-          <button
-            onClick={() => setCurrentView('findings')}
-            className={`btn ${currentView === 'findings' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ justifyContent: 'flex-start', width: '100%' }}
-          >
-            <Bug size={18} /> Findings
-          </button>
-
-          <button
-            onClick={() => setCurrentView('analytics')}
-            className={`btn ${currentView === 'analytics' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ justifyContent: 'flex-start', width: '100%' }}
-          >
-            <LineChart size={18} /> Analytics
-          </button>
-
-          <button
-            onClick={() => setCurrentView('heals')}
-            className={`btn ${currentView === 'heals' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ justifyContent: 'flex-start', width: '100%' }}
-          >
-            <Wrench size={18} /> Heal Review
-          </button>
-
-          <button
-            onClick={() => setCurrentView('endpoints')}
-            className={`btn ${currentView === 'endpoints' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ justifyContent: 'flex-start', width: '100%' }}
-          >
-            <BarChart3 size={18} /> API Health
-          </button>
-
-          <button
-            onClick={() => setCurrentView('personas')}
-            className={`btn ${currentView === 'personas' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ justifyContent: 'flex-start', width: '100%' }}
-          >
-            <Users size={18} /> Personas Builder
-          </button>
-
-          {me?.authEnabled && !anonymous && (
-            <button
-              onClick={() => setCurrentView('access')}
-              className={`btn ${currentView === 'access' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ justifyContent: 'flex-start', width: '100%' }}
-            >
-              <ShieldCheck size={18} /> Access &amp; Keys
-            </button>
-          )}
-
-          <button
-            onClick={() => setCurrentView('settings')}
-            className={`btn ${currentView === 'settings' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ justifyContent: 'flex-start', width: '100%', marginTop: 'auto' }}
-          >
-            <Settings size={18} /> Settings
-          </button>
+        {/* Navigation */}
+        <nav style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem', flex: 1 }}>
+          {navGroups.map((group) => (
+            <div key={group.label} className="nav-section">
+              <span className="nav-label">{group.label}</span>
+              {group.items.map(({ view, label, Icon }) => (
+                <button
+                  key={view}
+                  onClick={() => setCurrentView(view)}
+                  className="nav-item"
+                  aria-current={currentView === view ? 'page' : undefined}
+                  aria-label={label}
+                  title={label}
+                >
+                  <Icon size={17} aria-hidden />
+                  <span className="nav-text">{label}</span>
+                </button>
+              ))}
+            </div>
+          ))}
         </nav>
 
-        {/* Local Agent Status */}
+        {/* Runner status */}
         {selectedProject && (
           <div
+            className="hide-narrow"
             style={{
-              background: 'rgba(255,255,255,0.02)',
               border: '1px solid var(--border-glass)',
-              padding: '1rem',
+              background: 'var(--surface-raised)',
+              padding: '0.7rem 0.8rem',
               borderRadius: 'var(--radius-md)',
               display: 'flex',
               alignItems: 'center',
-              gap: '0.75rem',
+              gap: '0.65rem',
             }}
           >
-            <div className={selectedProject.agentOnline ? 'pulse-online' : 'pulse-offline'}></div>
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <span style={{ fontSize: '0.75rem', fontWeight: 700 }}>Local CLI Agent</span>
-              <span style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))' }}>
+            <div className={selectedProject.agentOnline ? 'pulse-online' : 'pulse-offline'} />
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 600 }}>Local CLI Agent</span>
+              <span style={{ fontSize: '0.72rem', color: 'hsl(var(--text-muted))' }}>
                 {selectedProject.agentOnline ? 'Connected' : 'Offline'}
               </span>
             </div>
@@ -372,36 +373,66 @@ export default function App() {
 
         {/* Account */}
         {me?.authEnabled && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.8rem' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.55rem',
+              fontSize: '0.8rem',
+              padding: '0 0.3rem',
+            }}
+          >
             {anonymous ? (
               <button
                 onClick={() => setShowLogin(true)}
                 className="btn btn-secondary"
-                style={{ width: '100%', justifyContent: 'center' }}
+                style={{ width: '100%' }}
               >
                 <LogIn size={14} /> Sign in
               </button>
             ) : (
               <>
-                {me.user?.avatarUrl && (
+                {me.user?.avatarUrl ? (
                   <img
                     src={me.user.avatarUrl}
                     alt=""
-                    width={24}
-                    height={24}
+                    width={26}
+                    height={26}
                     style={{ borderRadius: '50%' }}
                   />
+                ) : (
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 26,
+                      height: 26,
+                      borderRadius: '50%',
+                      display: 'grid',
+                      placeItems: 'center',
+                      background: 'var(--accent-soft)',
+                      color: 'hsl(var(--accent-purple))',
+                      fontWeight: 700,
+                      fontSize: '0.75rem',
+                    }}
+                  >
+                    {(me.user?.login ?? 'A').slice(0, 1).toUpperCase()}
+                  </span>
                 )}
-                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <span
+                  className="hide-narrow"
+                  style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
+                >
                   {me.user?.login ?? 'admin'}
                   {me.admin && <span style={{ color: 'hsl(var(--text-muted))' }}> · admin</span>}
                 </span>
                 <button
                   onClick={() => void signOut()}
-                  className="btn btn-secondary"
-                  style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                  className="btn btn-ghost"
+                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
+                  aria-label="Sign out"
+                  title="Sign out"
                 >
-                  <LogOut size={12} /> Sign out
+                  <LogOut size={14} /> <span className="hide-narrow">Sign out</span>
                 </button>
               </>
             )}
@@ -409,147 +440,178 @@ export default function App() {
         )}
       </aside>
 
-      {/* Main Content Area */}
-      <main
-        style={{
-          flex: 1,
-          padding: '2.5rem',
-          overflowY: 'auto',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '2rem',
-        }}
-      >
-        {/* Header Panel */}
-        <header
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            borderBottom: '1px solid var(--border-glass)',
-            paddingBottom: '1rem',
-          }}
-        >
-          <div>
-            <h2 style={{ fontFamily: 'var(--font-title)', fontWeight: 700, fontSize: '1.75rem' }}>
-              {currentView === 'dashboard' && 'Project Summary'}
-              {currentView === 'sessions' && 'Autonomous Test Suites'}
-              {currentView === 'findings' && 'Findings'}
-              {currentView === 'analytics' && 'Analytics'}
-              {currentView === 'heals' && 'Heal Review'}
-              {currentView === 'endpoints' && 'API Analytics'}
-              {currentView === 'personas' && 'AI Personas'}
-              {currentView === 'access' && 'Access & Keys'}
-              {currentView === 'settings' && 'Platform Settings'}
-            </h2>
-            <p style={{ color: 'hsl(var(--text-muted))', fontSize: '0.9rem', marginTop: '0.2rem' }}>
-              Active Project:{' '}
-              <span style={{ color: 'hsl(var(--text-primary))', fontWeight: 500 }}>
-                {selectedProject?.name || 'None'}
-              </span>
-            </p>
-          </div>
-
-          {/* Quick status bar */}
-          <div style={{ display: 'flex', gap: '1rem' }}>
-            {selectedProject && (
-              <div
-                className="glass-card"
-                style={{
-                  padding: '0.5rem 1rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  fontSize: '0.85rem',
-                }}
-              >
-                <Terminal size={14} style={{ color: 'hsl(var(--accent-purple))' }} />
-                <span
-                  style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '0.75rem',
-                    color: 'hsl(var(--text-muted))',
-                  }}
-                >
-                  ghostiq agent -k {selectedProject.id}
-                  {me?.authEnabled ? ' --api-key <key>' : ''}
-                </span>
-              </div>
-            )}
-          </div>
-        </header>
-
-        {/* View Routing */}
-        {!selectedProject ? (
-          <div className="glass-card" style={{ textAlign: 'center', padding: '5rem 2rem' }}>
-            <span style={{ fontSize: '3rem' }}>📁</span>
-            <h3 style={{ fontFamily: 'var(--font-title)', fontSize: '1.5rem', marginTop: '1rem' }}>
-              Create a Project to Get Started
-            </h3>
-            <p
+      {/* Main */}
+      <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <header className="topbar">
+          <div style={{ minWidth: 0 }}>
+            <div
               style={{
+                fontSize: '0.78rem',
                 color: 'hsl(var(--text-muted))',
-                marginTop: '0.5rem',
-                marginBottom: '1.5rem',
+                display: 'flex',
+                gap: '0.4rem',
+                alignItems: 'center',
               }}
             >
-              Each project holds session histories, agent actions, and discovered endpoints.
+              <span style={{ color: 'hsl(var(--text-primary))', fontWeight: 550 }}>
+                {selectedProject?.name || 'No project'}
+              </span>
+              {selectedProject?.public && <span className="badge badge-info">public</span>}
+              <span aria-hidden>/</span>
+              <span>{page.title}</span>
+            </div>
+            <h2 style={{ fontSize: '1.35rem', marginTop: '0.15rem' }}>{page.title}</h2>
+            <p
+              style={{ color: 'hsl(var(--text-muted))', fontSize: '0.84rem', marginTop: '0.1rem' }}
+            >
+              {page.subtitle}
             </p>
-            {!anonymous && (
-              <button onClick={() => setShowAddModal(true)} className="btn btn-primary">
-                <Plus size={16} /> New Project
-              </button>
-            )}
           </div>
-        ) : (
-          <>
-            {currentView === 'dashboard' && (
-              <DashboardView project={selectedProject} refresh={fetchProjects} />
-            )}
-            {currentView === 'sessions' && (
-              <SessionsView project={selectedProject} socket={socket} />
-            )}
-            {currentView === 'findings' && (
-              <FindingsView project={selectedProject} socket={socket} />
-            )}
-            {currentView === 'analytics' && (
-              <AnalyticsView
-                project={selectedProject}
-                socket={socket}
-                onReviewHeals={() => setCurrentView('heals')}
-              />
-            )}
-            {currentView === 'heals' && <HealsView project={selectedProject} socket={socket} />}
-            {currentView === 'endpoints' && <EndpointsView project={selectedProject} />}
-            {currentView === 'personas' && <PersonaBuilder project={selectedProject} />}
-            {currentView === 'access' && me && (
-              <AccessView project={selectedProject} me={me} refresh={fetchProjects} />
-            )}
-            {currentView === 'settings' && <LlmStatusPanel />}
-          </>
-        )}
+
+          {selectedProject && (
+            <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <span
+                className="chip"
+                title={
+                  selectedProject.agentOnline ? 'A runner is connected' : 'No runner connected'
+                }
+              >
+                <span className={selectedProject.agentOnline ? 'pulse-online' : 'pulse-offline'} />
+                Runner {selectedProject.agentOnline ? 'online' : 'offline'}
+              </span>
+              <button
+                className="chip"
+                onClick={() => void copyRunnerCommand()}
+                title="Copy the command that starts a runner for this project"
+                style={{
+                  cursor: 'pointer',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '0.74rem',
+                  maxWidth: 420,
+                }}
+              >
+                <Terminal size={13} style={{ color: 'hsl(var(--accent-purple))', flexShrink: 0 }} />
+                <span
+                  style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                >
+                  {runnerCommand}
+                </span>
+                <Copy size={12} style={{ flexShrink: 0 }} />
+              </button>
+            </div>
+          )}
+        </header>
+
+        <div className="page">
+          {!selectedProject ? (
+            <div
+              className="glass-card"
+              style={{
+                textAlign: 'center',
+                padding: '4.5rem 2rem',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '0.75rem',
+              }}
+            >
+              <div
+                aria-hidden
+                style={{
+                  width: 56,
+                  height: 56,
+                  borderRadius: 16,
+                  display: 'grid',
+                  placeItems: 'center',
+                  background: 'var(--accent-soft)',
+                  color: 'hsl(var(--accent-purple))',
+                }}
+              >
+                <FolderPlus size={26} />
+              </div>
+              <h3 style={{ fontSize: '1.3rem' }}>Create your first project</h3>
+              <p style={{ color: 'hsl(var(--text-muted))', maxWidth: 440 }}>
+                A project holds the runs, findings and API health of one app. Create one, start a
+                runner, then launch a persona from the Overview.
+              </p>
+              {!anonymous && (
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="btn btn-primary"
+                  style={{ marginTop: '0.5rem' }}
+                >
+                  <Plus size={16} /> New Project
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              {currentView === 'dashboard' && (
+                <DashboardView
+                  project={selectedProject}
+                  refresh={fetchProjects}
+                  onOpenSession={(id) => {
+                    window.history.replaceState(null, '', `/?session=${id}`);
+                    setCurrentView('sessions');
+                  }}
+                />
+              )}
+              {currentView === 'sessions' && (
+                <SessionsView project={selectedProject} socket={socket} />
+              )}
+              {currentView === 'findings' && (
+                <FindingsView project={selectedProject} socket={socket} />
+              )}
+              {currentView === 'analytics' && (
+                <AnalyticsView
+                  project={selectedProject}
+                  socket={socket}
+                  onReviewHeals={() => setCurrentView('heals')}
+                />
+              )}
+              {currentView === 'heals' && <HealsView project={selectedProject} socket={socket} />}
+              {currentView === 'endpoints' && <EndpointsView project={selectedProject} />}
+              {currentView === 'personas' && <PersonaBuilder project={selectedProject} />}
+              {currentView === 'access' && me && (
+                <AccessView project={selectedProject} me={me} refresh={fetchProjects} />
+              )}
+              {currentView === 'settings' && <LlmStatusPanel />}
+            </>
+          )}
+        </div>
       </main>
 
       {/* Create Project Modal */}
       {showAddModal && (
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="new-project-title"
+          onKeyDown={(e) => e.key === 'Escape' && setShowAddModal(false)}
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0,0,0,0.7)',
-            backdropFilter: 'blur(4px)',
+            background: 'rgba(5, 6, 10, 0.72)',
+            backdropFilter: 'blur(6px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 1000,
+            padding: '1rem',
           }}
         >
           <form
             onSubmit={handleCreateProject}
             className="glass-card"
-            style={{ width: '400px', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '1.1rem',
+            }}
           >
-            <h3 style={{ fontFamily: 'var(--font-title)', fontSize: '1.25rem' }}>
+            <h3 id="new-project-title" style={{ fontSize: '1.15rem' }}>
               Create New Project
             </h3>
             {createError && (
