@@ -23,6 +23,7 @@ export function startAgent(
 ): AgentHandle {
   const socket: Socket = io(runnerOptions.serverUrl, {
     query: { role: 'agent', projectId },
+    auth: runnerOptions.apiKey ? { token: runnerOptions.apiKey } : {},
     transports: ['websocket'],
     reconnection: true,
     reconnectionDelay: 2000,
@@ -33,7 +34,15 @@ export function startAgent(
   const connected = new Promise<void>((resolve) => socket.once('connect', () => resolve()));
   socket.on('connect', () => log('Runner connected. Waiting for runs...'));
   socket.on('disconnect', (reason) => log(`Runner disconnected (${reason}). Reconnecting...`));
-  socket.on('connect_error', (err) => log(`Runner connection error: ${err.message}. Retrying...`));
+  socket.on('connect_error', (err) => {
+    if (/Unauthorized/.test(err.message)) {
+      log(
+        `Runner refused: ${err.message}. Create a key under Project settings > API keys and pass it with --api-key (or GHOSTIQ_API_KEY).`,
+      );
+    } else {
+      log(`Runner connection error: ${err.message}. Retrying...`);
+    }
+  });
 
   socket.on(SocketEvents.runStart, (raw: unknown) => {
     const command = RunTestCommand.safeParse(raw);

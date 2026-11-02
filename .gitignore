@@ -43,3 +43,5 @@ Thumbs.db
 ghostiq-report/
 evals/cli-e2e/
 evals/dashboard-check/
+# All check/benchmark output is generated.
+evals/

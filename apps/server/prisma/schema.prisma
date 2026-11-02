@@ -16,9 +16,88 @@ model Project {
   createdAt      DateTime         @default(now())
   githubRepo     String?
   githubPrNumber Int?
+  /// Read-only for anonymous visitors (the public demo project).
+  public         Boolean          @default(false)
   sessions       TestSession[]
   endpoints      EndpointHealth[]
   findings       Finding[]
+  members        Membership[]
+  apiKeys        ApiKey[]
+}
+
+/// A person who signed in (GitHub) or the bootstrap admin.
+model User {
+  id          String        @id @default(uuid())
+  githubId    Int?          @unique
+  login       String        @unique
+  name        String?
+  avatarUrl   String?
+  /// Admins can see and manage every project.
+  admin       Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+  lastLoginAt DateTime?
+  memberships Membership[]
+  sessions    AuthSession[]
+}
+
+model Membership {
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// owner: everything incl. keys and members; member: runs, triage, heals; viewer: read only.
+  role      String   @default("member")
+  createdAt DateTime @default(now())
+
+  @@id([userId, projectId])
+}
+
+/// Dashboard login. The cookie holds a random token; only its SHA-256 is stored.
+model AuthSession {
+  id        String   @id @default(uuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  ip        String?
+  userAgent String?
+
+  @@index([userId])
+}
+
+/// Project-scoped key for runners, the CLI and CI. Shown once; only its SHA-256 is stored.
+model ApiKey {
+  id          String    @id @default(uuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name        String
+  /// First characters, to recognise a key in the UI ("gq_3f9a…").
+  prefix      String
+  hash        String    @unique
+  createdById String?
+  createdAt   DateTime  @default(now())
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+
+  @@index([projectId])
+}
+
+/// Who did what. Security-relevant actions only (logins, keys, members, runs, triage, ...).
+model AuditLog {
+  id           String   @id @default(uuid())
+  projectId    String?
+  actorType    String // user, api_key, admin_token, local, anonymous, system
+  actorId      String?
+  actorLabel   String
+  action       String // e.g. auth.login, api_key.create, run.start, finding.triage
+  target       String?
+  metadataJson String?
+  ip           String?
+  createdAt    DateTime @default(now())
+
+  @@index([projectId, createdAt])
+  @@index([createdAt])
 }
 
 model TestSession {

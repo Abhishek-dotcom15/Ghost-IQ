@@ -9,7 +9,7 @@
 different user personas through your web app (localhost, staging or production), watches
 network traffic, console errors and accessibility, and reports what broke with evidence.
 
-> **Status: v0.8 — CI and distribution.** Phases 0–6 of [the build plan](docs/PLAN.md)
+> **Status: v0.9 — security hardening.** Phases 0–7 of [the build plan](docs/PLAN.md)
 > are done: an agent core with guardrails, eight personas as YAML, 15 oracles that turn what the
 > agent sees into deduplicated findings, and now **explore once, replay forever**: a successful run
 > replays without an LLM, heals renamed controls (with human review), exports as a plain Playwright
@@ -18,7 +18,10 @@ network traffic, console errors and accessibility, and reports what broke with e
 > mode, see [docs/EVALUATION.md](docs/EVALUATION.md) for what that does and does not mean.
 > **v0.8 adds CI:** a `ghostiq` CLI with exit codes, a GitHub Action that comments on pull
 > requests, GitHub issue export, Slack/webhook notifications and an MCP server for coding agents.
-> Next: hardening and hosted deploy (Phase 7).
+> **v0.9 adds security for shared deployments:** GitHub sign-in, project roles, hashed API
+> keys for runners and CI, per-project live events, rate limits, an audit log, an SSRF guard,
+> retention and a public read-only demo mode ([docs/SECURITY.md](docs/SECURITY.md),
+> [docs/DEPLOY.md](docs/DEPLOY.md)). Next: evaluation and launch (Phase 8).
 
 ## CI
 
@@ -175,11 +178,13 @@ packages/
 examples/
   mock-target-app/   demo shop with 33 labelled bugs (bugs.json)
 scripts/smoke.mjs    end-to-end smoke test
-docs/                PLAN.md, ARCHITECTURE.md, PERSONAS.md, EVALUATION.md, CI.md
+docs/                PLAN.md, ARCHITECTURE.md, PERSONAS.md, EVALUATION.md, CI.md, SECURITY.md, DEPLOY.md
 scripts/bench-bugs.mjs  seeded-bug benchmark (recall / precision against bugs.json)
 scripts/cli-e2e.mjs     end-to-end check of the ghostiq CLI and MCP server
 scripts/check-dashboard.mjs  every dashboard page in a browser: console errors, failed requests, broken links
 scripts/check-links.mjs      Markdown links and anchors (part of pnpm verify; --external also requests URLs)
+scripts/auth-e2e.mjs         sign-in on: runner keys, CLI keys, evidence access, login screen, public demo
+render.yaml                  Render blueprint (server, runner, demo shop)
 action.yml           GitHub Action (composite)
 ```
 

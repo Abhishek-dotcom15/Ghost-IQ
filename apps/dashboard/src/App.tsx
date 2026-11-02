@@ -10,8 +10,14 @@ import {
   Terminal,
   LineChart,
   Wrench,
+  ShieldCheck,
+  LogIn,
+  LogOut,
 } from 'lucide-react';
+import AccessView from './components/AccessView';
 import AnalyticsView from './components/AnalyticsView';
+import LoginView from './components/LoginView';
+import { fetchMe, logout, type Me } from './lib/auth';
 import HealsView from './components/HealsView';
 import DashboardView from './components/DashboardView';
 import SessionsView from './components/SessionsView';
@@ -26,6 +32,8 @@ export interface Project {
   name: string;
   createdAt: string;
   agentOnline: boolean;
+  /** Read-only for anonymous visitors (public demo project). */
+  public?: boolean;
   sessions: any[];
   _count?: {
     sessions: number;
@@ -48,17 +56,47 @@ export default function App() {
     | 'heals'
     | 'endpoints'
     | 'personas'
+    | 'access'
     | 'settings'
   >(() => (new URLSearchParams(window.location.search).has('session') ? 'sessions' : 'dashboard'));
   const [newProjectName, setNewProjectName] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [me, setMe] = useState<Me | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchMe()
+      .then(setMe)
+      .catch(() => setMe(null));
+  }, []);
+
+  // Live events arrive per project room: (re)join the selected project's room.
+  const selectedId = selectedProject?.id;
+  useEffect(() => {
+    if (!selectedId) return;
+    const subscribe = () => socket.emit('subscribe', selectedId);
+    subscribe();
+    socket.on('connect', subscribe);
+    return () => {
+      socket.off('connect', subscribe);
+    };
+  }, [selectedId]);
+
+  const signOut = async () => {
+    await logout().catch(() => {});
+    window.location.href = '/';
+  };
+  const anonymous = !!me?.authEnabled && me.principal === 'anonymous';
 
   // Load Projects
   const fetchProjects = async () => {
     try {
       const res = await fetch('/api/projects');
-      const data = await res.json();
+      const data = res.ok ? await res.json() : [];
       setProjects(data);
+      setLoaded(true);
       if (data.length > 0 && !selectedProject) {
         setSelectedProject(data[0]);
       } else if (selectedProject) {
@@ -109,14 +147,22 @@ export default function App() {
         body: JSON.stringify({ name: newProjectName }),
       });
       const newProj = await res.json();
+      if (!res.ok) throw new Error(newProj.error ?? `HTTP ${res.status}`);
       setProjects((prev) => [...prev, newProj]);
       setSelectedProject(newProj);
       setNewProjectName('');
+      setCreateError(null);
       setShowAddModal(false);
     } catch (err) {
-      console.error('Failed to create project:', err);
+      setCreateError((err as Error).message);
     }
   };
+
+  // Sign-in is on and there is nothing public to show: ask to sign in.
+  if (me && anonymous && loaded && (projects.length === 0 || showLogin)) {
+    // A full reload reconnects the live socket with the new session cookie.
+    return <LoginView me={me} onSignedIn={() => window.location.reload()} />;
+  }
 
   return (
     <div
@@ -191,30 +237,34 @@ export default function App() {
                 </option>
               ))}
             </select>
-            <button
-              onClick={() => setShowAddModal(true)}
-              style={{
-                width: '38px',
-                height: '38px',
-                background: 'rgba(255,255,255,0.05)',
-                border: '1px solid var(--border-glass)',
-                borderRadius: 'var(--radius-sm)',
-                color: '#fff',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                transition: 'var(--transition-smooth)',
-              }}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)')
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)')
-              }
-            >
-              <Plus size={18} />
-            </button>
+            {!anonymous && (
+              <button
+                onClick={() => setShowAddModal(true)}
+                aria-label="New project"
+                title="New project"
+                style={{
+                  width: '38px',
+                  height: '38px',
+                  background: 'rgba(255,255,255,0.05)',
+                  border: '1px solid var(--border-glass)',
+                  borderRadius: 'var(--radius-sm)',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'var(--transition-smooth)',
+                }}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)')
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)')
+                }
+              >
+                <Plus size={18} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -276,6 +326,16 @@ export default function App() {
             <Users size={18} /> Personas Builder
           </button>
 
+          {me?.authEnabled && !anonymous && (
+            <button
+              onClick={() => setCurrentView('access')}
+              className={`btn ${currentView === 'access' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ justifyContent: 'flex-start', width: '100%' }}
+            >
+              <ShieldCheck size={18} /> Access &amp; Keys
+            </button>
+          )}
+
           <button
             onClick={() => setCurrentView('settings')}
             className={`btn ${currentView === 'settings' ? 'btn-primary' : 'btn-secondary'}`}
@@ -305,6 +365,44 @@ export default function App() {
                 {selectedProject.agentOnline ? 'Connected' : 'Offline'}
               </span>
             </div>
+          </div>
+        )}
+
+        {/* Account */}
+        {me?.authEnabled && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.8rem' }}>
+            {anonymous ? (
+              <button
+                onClick={() => setShowLogin(true)}
+                className="btn btn-secondary"
+                style={{ width: '100%', justifyContent: 'center' }}
+              >
+                <LogIn size={14} /> Sign in
+              </button>
+            ) : (
+              <>
+                {me.user?.avatarUrl && (
+                  <img
+                    src={me.user.avatarUrl}
+                    alt=""
+                    width={24}
+                    height={24}
+                    style={{ borderRadius: '50%' }}
+                  />
+                )}
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {me.user?.login ?? 'admin'}
+                  {me.admin && <span style={{ color: 'hsl(var(--text-muted))' }}> · admin</span>}
+                </span>
+                <button
+                  onClick={() => void signOut()}
+                  className="btn btn-secondary"
+                  style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                >
+                  <LogOut size={12} /> Sign out
+                </button>
+              </>
+            )}
           </div>
         )}
       </aside>
@@ -339,6 +437,7 @@ export default function App() {
               {currentView === 'heals' && 'Heal Review'}
               {currentView === 'endpoints' && 'API Analytics'}
               {currentView === 'personas' && 'AI Personas'}
+              {currentView === 'access' && 'Access & Keys'}
               {currentView === 'settings' && 'Platform Settings'}
             </h2>
             <p style={{ color: 'hsl(var(--text-muted))', fontSize: '0.9rem', marginTop: '0.2rem' }}>
@@ -370,7 +469,8 @@ export default function App() {
                     color: 'hsl(var(--text-muted))',
                   }}
                 >
-                  npx ghostiq-agent -k {selectedProject.id}
+                  ghostiq agent -k {selectedProject.id}
+                  {me?.authEnabled ? ' --api-key <key>' : ''}
                 </span>
               </div>
             )}
@@ -393,9 +493,11 @@ export default function App() {
             >
               Each project holds session histories, agent actions, and discovered endpoints.
             </p>
-            <button onClick={() => setShowAddModal(true)} className="btn btn-primary">
-              <Plus size={16} /> New Project
-            </button>
+            {!anonymous && (
+              <button onClick={() => setShowAddModal(true)} className="btn btn-primary">
+                <Plus size={16} /> New Project
+              </button>
+            )}
           </div>
         ) : (
           <>
@@ -418,6 +520,9 @@ export default function App() {
             {currentView === 'heals' && <HealsView project={selectedProject} socket={socket} />}
             {currentView === 'endpoints' && <EndpointsView project={selectedProject} />}
             {currentView === 'personas' && <PersonaBuilder project={selectedProject} />}
+            {currentView === 'access' && me && (
+              <AccessView project={selectedProject} me={me} refresh={fetchProjects} />
+            )}
             {currentView === 'settings' && <LlmStatusPanel />}
           </>
         )}
@@ -445,6 +550,11 @@ export default function App() {
             <h3 style={{ fontFamily: 'var(--font-title)', fontSize: '1.25rem' }}>
               Create New Project
             </h3>
+            {createError && (
+              <p role="alert" style={{ color: 'hsl(var(--danger))', fontSize: '0.85rem' }}>
+                {createError}
+              </p>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               <label style={{ fontSize: '0.85rem' }}>Project Name</label>
               <input

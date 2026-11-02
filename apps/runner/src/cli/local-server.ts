@@ -57,6 +57,8 @@ export async function startLocalServer(
     GHOSTIQ_SCREENSHOT_DIR: path.join(dataDir, 'screenshots'),
     GHOSTIQ_ARTIFACT_DIR: path.join(dataDir, 'artifacts'),
     NODE_ENV: 'production',
+    // Private to this process (127.0.0.1, random port, deleted afterwards): no sign-in.
+    GHOSTIQ_AUTH: 'off',
   };
 
   execFileSync(

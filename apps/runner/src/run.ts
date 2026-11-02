@@ -6,13 +6,15 @@ import { resolveDevice, resolveNetwork } from '@ghostiq/personas';
 import { SocketEvents, type RunTestCommand } from '@ghostiq/shared';
 import type { Socket } from 'socket.io-client';
 import { PlaywrightDriver } from './driver.js';
-import { HttpPlanner, httpHealer } from './planner.js';
+import { HttpPlanner, authHeader, httpHealer } from './planner.js';
 
 export interface RunnerOptions {
   serverUrl: string;
   headless: boolean;
   trace: boolean;
   storageStatePath?: string;
+  /** Project API key (servers with sign-in on). Sent on the socket handshake and every HTTP call. */
+  apiKey?: string;
   /** Per-run log lines (default: stdout). The CLI silences them and prints its own progress. */
   log?: (msg: string) => void;
 }
@@ -53,8 +55,11 @@ export async function executeRun(
       driver,
       // Replays need no planner model; the heal ladder asks one only when an element is gone.
       planner: command.replay
-        ? new ReplayPlanner(command.replay, httpHealer(options.serverUrl, command.sessionId))
-        : new HttpPlanner(options.serverUrl),
+        ? new ReplayPlanner(
+            command.replay,
+            httpHealer(options.serverUrl, command.sessionId, options.apiKey),
+          )
+        : new HttpPlanner(options.serverUrl, options.apiKey),
       signal,
       events: {
         stepStarted: (event) => {
@@ -83,7 +88,7 @@ export async function executeRun(
   socket.emit(SocketEvents.sessionCompleted, { sessionId: command.sessionId, ...outcome });
 
   if (driver) {
-    await uploadTrace(driver, command.sessionId, options.serverUrl, log);
+    await uploadTrace(driver, command.sessionId, options.serverUrl, log, options.apiKey);
     await driver.close();
   }
   return outcome;
@@ -94,13 +99,14 @@ async function uploadTrace(
   sessionId: string,
   serverUrl: string,
   log: (m: string) => void,
+  apiKey?: string,
 ) {
   const file = path.join(os.tmpdir(), `ghostiq-trace-${sessionId}.zip`);
   try {
     if (!(await driver.saveTrace(file))) return;
     const res = await fetch(`${serverUrl}/api/sessions/${sessionId}/trace`, {
       method: 'PUT',
-      headers: { 'content-type': 'application/zip' },
+      headers: { 'content-type': 'application/zip', ...authHeader(apiKey) },
       body: await fs.promises.readFile(file),
     });
     if (res.ok) log('trace uploaded');

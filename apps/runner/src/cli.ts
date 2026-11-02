@@ -121,7 +121,13 @@ program
         opts.agent !== false
           ? startAgent(
               source.projectId,
-              { serverUrl: client.baseUrl, headless: !opts.headed, trace: true, log: () => {} },
+              {
+                serverUrl: client.baseUrl,
+                headless: !opts.headed,
+                trace: true,
+                apiKey: client.apiKey,
+                log: () => {},
+              },
               () => {},
             )
           : undefined;
@@ -247,6 +253,11 @@ program
     'GhostIQ server',
     process.env.GHOSTIQ_SERVER_URL ?? 'http://localhost:3001',
   )
+  .option(
+    '--api-key <key>',
+    'project API key (servers with sign-in on)',
+    process.env.GHOSTIQ_API_KEY,
+  )
   .option('--headed', 'show the browser')
   .option('--no-trace', 'do not record Playwright traces')
   .option(
@@ -260,6 +271,7 @@ program
       headless: !opts.headed,
       trace: opts.trace,
       storageStatePath: opts.storageState,
+      apiKey: opts.apiKey,
     });
     const exit = () => void agent.stop().then(() => process.exit(0));
     process.on('SIGINT', exit);

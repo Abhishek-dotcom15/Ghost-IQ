@@ -1,4 +1,7 @@
+import path from 'node:path';
 import { createApp } from './app.js';
+import { AuditLog } from './auth/audit.js';
+import { applyRetention, scheduleRetention } from './retention.js';
 import { createPrismaClient } from './db.js';
 import { loadEnv } from './env.js';
 import { createLlmRuntime, describeLlm } from './llm.js';
@@ -11,6 +14,28 @@ const llm = createLlmRuntime(env, prisma);
 const ai = new AiService(llm.client);
 const personas = new PersonaRegistry(prisma, env.GHOSTIQ_PERSONAS_DIR);
 const { server, io } = createApp({ env, prisma, ai, llm, personas });
+
+if (env.GHOSTIQ_RETENTION_DAYS) {
+  const days = env.GHOSTIQ_RETENTION_DAYS;
+  const dirs = {
+    screenshots: path.resolve(env.GHOSTIQ_SCREENSHOT_DIR),
+    artifacts: path.resolve(env.GHOSTIQ_ARTIFACT_DIR),
+  };
+  const audit = new AuditLog(prisma);
+  scheduleRetention(async () => {
+    const result = await applyRetention(prisma, dirs, days);
+    if (result.sessions) {
+      await audit.record(
+        { kind: 'local' },
+        { action: 'retention.run', metadata: { days, ...result } },
+      );
+    }
+    return result;
+  });
+  console.log(
+    `Retention: runs older than ${days} day(s) are deleted (baselines and referenced evidence kept).`,
+  );
+}
 
 server.listen(env.PORT, () => {
   console.log(`GhostIQ server listening on http://localhost:${env.PORT}`);

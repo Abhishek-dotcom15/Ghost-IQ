@@ -21,6 +21,11 @@ program
     'GhostIQ server URL',
     process.env.GHOSTIQ_SERVER_URL ?? 'http://localhost:3001',
   )
+  .option(
+    '--api-key <key>',
+    'Project API key (needed when the server has sign-in on)',
+    process.env.GHOSTIQ_API_KEY,
+  )
   .option('--headed', 'Show the browser window', false)
   .option('--no-trace', 'Do not record Playwright traces')
   .option(
@@ -38,6 +43,7 @@ function runAgentCommand(options: {
   headed: boolean;
   trace: boolean;
   storageState?: string;
+  apiKey?: string;
 }) {
   const serverUrl = options.url.replace(/\/+$/, '');
   console.log('\nGhostIQ runner agent');
@@ -51,6 +57,7 @@ function runAgentCommand(options: {
     headless: !options.headed,
     trace: options.trace,
     storageStatePath: options.storageState,
+    apiKey: options.apiKey,
   });
 
   let stopping = false;

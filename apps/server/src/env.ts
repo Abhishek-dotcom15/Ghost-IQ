@@ -28,6 +28,40 @@ const EnvSchema = z.object({
   /** Public dashboard URL used in notifications, e.g. https://ghostiq.example.com */
   GHOSTIQ_PUBLIC_URL: optional(z.url()),
 
+  // ---- Security (docs/SECURITY.md)
+  /** on: every API call needs a login, API key or admin token. Default: on in production. */
+  GHOSTIQ_AUTH: optional(z.enum(['on', 'off'])),
+  /** Bootstrap admin login (and break-glass access). At least 24 characters. */
+  GHOSTIQ_ADMIN_TOKEN: optional(
+    z.string().min(24, 'GHOSTIQ_ADMIN_TOKEN must be at least 24 characters'),
+  ),
+  GITHUB_CLIENT_ID: optional(z.string()),
+  GITHUB_CLIENT_SECRET: optional(z.string()),
+  /** GitHub logins allowed to sign in (comma-separated), or "*" for anyone. */
+  GHOSTIQ_GITHUB_ALLOWED_USERS: optional(z.string()),
+  /** Overrides for GitHub Enterprise and tests. */
+  GHOSTIQ_GITHUB_OAUTH_URL: z.url().default('https://github.com'),
+  GHOSTIQ_GITHUB_API_URL: z.url().default('https://api.github.com'),
+  GHOSTIQ_SESSION_TTL_HOURS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(24 * 90)
+    .default(24 * 7),
+  /** Hosted mode: refuse run targets and webhooks on private/internal addresses (SSRF guard). */
+  GHOSTIQ_HOSTED: z
+    .enum(['true', 'false', '1', '0'])
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+  /** Hosts allowed even when they resolve to private addresses (e.g. the demo app's service name). */
+  GHOSTIQ_ALLOWED_TARGETS: optional(z.string()),
+  /** Default: on when sign-in is on (shared server), off for a local single-user install. */
+  GHOSTIQ_RATE_LIMIT: optional(z.enum(['on', 'off'])),
+  /** Number of reverse proxies in front of the server (sets Express "trust proxy" for client IPs). */
+  GHOSTIQ_TRUST_PROXY: z.coerce.number().int().min(0).max(5).default(0),
+  /** Delete runs older than this many days (baselines and evidence still used by findings are kept). */
+  GHOSTIQ_RETENTION_DAYS: optional(z.coerce.number().int().min(1)),
+
   // ---- LLM (see packages/llm). Unset provider + no key => demo mode.
   GHOSTIQ_LLM_PROVIDER: optional(z.enum(['gemini', 'claude', 'openai', 'ollama', 'mock'])),
   GHOSTIQ_LLM_MODEL: optional(z.string()),
@@ -62,5 +96,30 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     const issues = parsed.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`).join('\n');
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
-  return parsed.data;
+  const env = parsed.data;
+  if (authEnabled(env) && !env.GHOSTIQ_ADMIN_TOKEN && !githubConfigured(env)) {
+    throw new Error(
+      'Authentication is on (GHOSTIQ_AUTH=on, the default in production) but no way to sign in is configured. ' +
+        'Set GHOSTIQ_ADMIN_TOKEN (24+ characters) and/or GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET, ' +
+        'or set GHOSTIQ_AUTH=off for a private, single-user install.',
+    );
+  }
+  if (githubConfigured(env) && !env.GHOSTIQ_GITHUB_ALLOWED_USERS) {
+    throw new Error(
+      'GitHub sign-in is configured without GHOSTIQ_GITHUB_ALLOWED_USERS. List the allowed GitHub logins (comma-separated), or "*" to allow anyone.',
+    );
+  }
+  return env;
+}
+
+export function authEnabled(env: Env): boolean {
+  return (env.GHOSTIQ_AUTH ?? (env.NODE_ENV === 'production' ? 'on' : 'off')) === 'on';
+}
+
+export function rateLimitEnabled(env: Env): boolean {
+  return (env.GHOSTIQ_RATE_LIMIT ?? (authEnabled(env) ? 'on' : 'off')) === 'on';
+}
+
+export function githubConfigured(env: Env): boolean {
+  return !!(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET);
 }

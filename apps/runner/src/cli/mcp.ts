@@ -63,6 +63,7 @@ export async function startMcpServer(options: McpOptions): Promise<void> {
           serverUrl: client.baseUrl,
           headless: !options.headed,
           trace: true,
+          apiKey: client.apiKey,
           log: (m) => console.error(m),
         },
         (m) => console.error(m),

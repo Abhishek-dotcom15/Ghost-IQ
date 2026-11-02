@@ -33,6 +33,9 @@ inputs:
   server:
     description: Existing GhostIQ server URL. Empty = start a temporary server inside the job.
     default: ''
+  api-key:
+    description: Project API key for that server (when it has sign-in on). Pass a secret.
+    default: ''
   report-dir:
     description: Where reports are written (relative to the workspace).
     default: ghostiq-report
@@ -109,6 +112,7 @@ runs:
         GHOSTIQ_LLM_MODEL: ${{ inputs.llm-model }}
         GHOSTIQ_LLM_API_KEY: ${{ inputs.llm-api-key }}
         GHOSTIQ_LLM_STRICT: 'true'
+        GHOSTIQ_API_KEY: ${{ inputs.api-key }}
       run: |
         args=(run --target "$INPUT_TARGET" --personas "$INPUT_PERSONAS" --max-steps "$INPUT_MAX_STEPS"
               --fail-on "$INPUT_FAIL_ON" --report-dir "$INPUT_REPORT_DIR")

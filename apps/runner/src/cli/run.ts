@@ -56,6 +56,7 @@ export async function runCommand(
           headless: !config.headed,
           trace: true,
           storageStatePath: config.storageState,
+          apiKey: client.apiKey,
           log: process.env.GHOSTIQ_DEBUG ? log : () => {},
         },
         () => {},
@@ -178,7 +179,7 @@ async function bundleScreenshots(
   fs.mkdirSync(path.join(dir, 'screenshots'), { recursive: true });
   for (const p of paths) {
     try {
-      const res = await fetch(`${client.baseUrl}${p}`);
+      const res = await fetch(`${client.baseUrl}${p}`, { headers: client.authHeaders() });
       if (res.ok)
         fs.writeFileSync(path.join(dir, p.slice(1)), Buffer.from(await res.arrayBuffer()));
     } catch {

@@ -69,9 +69,20 @@ export interface Project {
 
 export class GhostiqClient {
   readonly baseUrl: string;
+  /** Project API key or admin token; defaults to GHOSTIQ_API_KEY. */
+  readonly apiKey?: string;
 
-  constructor(baseUrl: string) {
+  constructor(
+    baseUrl: string,
+    apiKey: string | undefined = process.env.GHOSTIQ_API_KEY || undefined,
+  ) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.apiKey = apiKey;
+  }
+
+  /** Headers for requests made outside this client (screenshots). */
+  authHeaders(): Record<string, string> {
+    return this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {};
   }
 
   private async request<T>(method: string, path: string, body?: unknown, raw = false): Promise<T> {
@@ -79,7 +90,10 @@ export class GhostiqClient {
     try {
       res = await fetch(`${this.baseUrl}${path}`, {
         method,
-        headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+        headers: {
+          ...this.authHeaders(),
+          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(60_000),
       });
@@ -128,6 +142,8 @@ export class GhostiqClient {
     const all = await this.projects();
     const found = all.find((p) => p.id === idOrName) ?? all.find((p) => p.name === idOrName);
     if (found) return found;
+    // A project API key sees exactly its own project: use it.
+    if (this.apiKey?.startsWith('gq_') && all.length === 1) return all[0]!;
     if (!create) throw new ApiError(404, `Project "${idOrName}" not found`);
     return { ...(await this.createProject(idOrName)), agentOnline: false };
   }

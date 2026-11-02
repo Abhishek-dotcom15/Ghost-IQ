@@ -20,7 +20,7 @@ import {
 } from '@ghostiq/shared';
 import { z } from 'zod';
 import type { PrismaClient } from './db.js';
-import type { Env } from './env.js';
+import { rateLimitEnabled, type Env } from './env.js';
 import { FindingsEngine, type FindingChange } from './findings/engine.js';
 import { registerFindingRoutes } from './findings/routes.js';
 import { registerExportRoutes } from './export/routes.js';
@@ -28,6 +28,14 @@ import { registerAnalyticsRoutes } from './analytics/routes.js';
 import { updateRunningAverage } from './lib/flakiness.js';
 import { ReplayService, registerReplayRoutes } from './replay/service.js';
 import { buildPayload, sendWebhook } from './notify/webhook.js';
+import { authorize, can, sameOriginForCookieWrites, visibleProjectIds } from './auth/access.js';
+import { AuditLog } from './auth/audit.js';
+import { auditTrail } from './auth/audit-trail.js';
+import { Authenticator, type Principal } from './auth/principal.js';
+import { registerAuthRoutes } from './auth/routes.js';
+import { securityHeaders } from './security/headers.js';
+import { RateLimiter, rateLimit } from './security/rate-limit.js';
+import { BlockedTargetError, assertPublicUrl, parseAllowedHosts } from './security/ssrf.js';
 import { describeLlm, type LlmRuntime } from './llm.js';
 import type { AiService } from './services/ai.js';
 import {
@@ -43,6 +51,8 @@ export interface AppDeps {
   ai: AiService;
   llm: LlmRuntime;
   personas: PersonaRegistry;
+  /** Outbound HTTP for GitHub sign-in (tests inject a fake). */
+  fetch?: typeof fetch;
 }
 
 /** Persona as returned by the API (spec included for the builder and launch form). */
@@ -110,7 +120,14 @@ export function buildRunConfig(body: StartRunBody): RunConfig {
  * Builds the HTTP server, Express app and Socket.IO hub without listening,
  * so tests can drive it with supertest.
  */
-export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqApp {
+export function createApp({
+  env,
+  prisma,
+  ai,
+  llm,
+  personas,
+  fetch: fetchImpl,
+}: AppDeps): GhostIqApp {
   const corsOrigins = env.GHOSTIQ_CORS_ORIGINS.split(',')
     .map((o) => o.trim())
     .filter(Boolean);
@@ -129,10 +146,22 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
     artifacts: artifactsDir,
   });
 
+  const auth = new Authenticator(prisma, env);
+  const audit = new AuditLog(prisma);
+  const limiter = new RateLimiter();
+  const ssrf = { allowedHosts: parseAllowedHosts(env.GHOSTIQ_ALLOWED_TARGETS) };
+
+  // Events go to the project's room only: dashboards join rooms of projects they may read.
+  const room = (projectId: string) => `project:${projectId}`;
+  const emitProject = (projectId: string, event: string, data: unknown) =>
+    io.to(room(projectId)).emit(event, data);
+  const pushUpdate = (projectId: string, sessionId: string, type: string, data: unknown) =>
+    emitProject(projectId, SocketEvents.sessionUpdate(sessionId), { type, data });
+
   /** Live updates: the run view refreshes its findings, the inbox shows new ones. */
   const announceFindings = (sessionId: string, projectId: string, changes: FindingChange[]) => {
-    pushUpdate(sessionId, 'findings-updated', { count: changes.length });
-    io.emit('findings-updated', {
+    pushUpdate(projectId, sessionId, 'findings-updated', { count: changes.length });
+    emitProject(projectId, 'findings-updated', {
       projectId,
       newFindings: changes.filter((c) => c.isNew).length,
       regressed: changes.filter((c) => c.regressed).length,
@@ -142,17 +171,21 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
   fs.mkdirSync(artifactsDir, { recursive: true });
 
   app.disable('x-powered-by');
-  app.use(cors({ origin: corsOrigins }));
+  if (env.GHOSTIQ_TRUST_PROXY) app.set('trust proxy', env.GHOSTIQ_TRUST_PROXY);
+  app.use(securityHeaders({ https: (env.GHOSTIQ_PUBLIC_URL ?? '').startsWith('https://') }));
+  app.use(cors({ origin: corsOrigins, credentials: true }));
   app.use(express.json({ limit: '2mb' }));
+  app.use(sameOriginForCookieWrites(corsOrigins));
+  app.use(authorize(prisma, auth));
+  if (rateLimitEnabled(env)) app.use(rateLimit(limiter));
+  app.use(auditTrail(audit));
   app.use('/screenshots', express.static(screenshotsDir, { fallthrough: false }));
   app.use('/artifacts', express.static(artifactsDir, { fallthrough: false }));
+  registerAuthRoutes(app, { prisma, env, auth, audit, fetch: fetchImpl });
 
   // projectId -> connected runner socket; sessionId -> socket executing it
   const connectedAgents = new Map<string, Socket>();
   const activeRuns = new Map<string, Socket>();
-
-  const pushUpdate = (sessionId: string, type: string, data: unknown) =>
-    io.emit(SocketEvents.sessionUpdate(sessionId), { type, data });
 
   /** Hands a run to the project's runner; false when none is connected. */
   const dispatch = (projectId: string, command: RunTestCommand): boolean => {
@@ -165,24 +198,63 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
   const replays = new ReplayService(prisma, {
     dispatch,
     online: (projectId) => connectedAgents.has(projectId),
-    notify: (event, data) => io.emit(event, data),
+    notify: (event, data) => emitProject((data as { projectId: string }).projectId, event, data),
   });
   void replays
     .resetLegacyFlakiness()
     .catch((err: unknown) => console.error('[replay] flakiness cleanup failed:', err));
 
   // ---------------------------------------------------------------- sockets
+  // Every socket is authenticated at the handshake: runners with a project API key
+  // (auth.token), dashboards with their session cookie.
+  io.use(async (socket, next) => {
+    try {
+      const principal = await auth.fromHeaders(
+        socket.handshake.headers,
+        socket.handshake.auth?.token,
+      );
+      socket.data.principal = principal;
+      const { role, projectId } = socket.handshake.query;
+      if (role === 'agent') {
+        if (typeof projectId !== 'string' || !projectId)
+          return next(new Error('projectId is required'));
+        if (auth.enabled && !(await can(prisma, principal, projectId, 'write'))) {
+          await audit.record(
+            principal,
+            { action: 'runner.denied', projectId },
+            socket.handshake.address,
+          );
+          return next(new Error('Unauthorized: a valid API key for this project is required'));
+        }
+      }
+      next();
+    } catch (err) {
+      next(err as Error);
+    }
+  });
+
   io.on('connection', (socket) => {
+    const principal = socket.data.principal as Principal;
     const { role, projectId } = socket.handshake.query;
-    if (role !== 'agent' || typeof projectId !== 'string' || !projectId) return;
+    if (role !== 'agent' || typeof projectId !== 'string' || !projectId) {
+      // Dashboard: receives events of the projects it subscribes to (and may read).
+      socket.on('subscribe', async (raw: unknown) => {
+        const pid = typeof raw === 'string' ? raw : (raw as { projectId?: unknown })?.projectId;
+        if (typeof pid !== 'string' || !pid) return;
+        if (auth.enabled && !(await can(prisma, principal, pid, 'read'))) return;
+        for (const r of socket.rooms) if (r.startsWith('project:')) void socket.leave(r);
+        void socket.join(room(pid));
+      });
+      return;
+    }
 
     connectedAgents.set(projectId, socket);
     console.log(`[agent] connected for project ${projectId}`);
-    io.emit(SocketEvents.agentStatusChange, { projectId, status: 'online' });
+    emitProject(projectId, SocketEvents.agentStatusChange, { projectId, status: 'online' });
 
     socket.on('disconnect', async () => {
       if (connectedAgents.get(projectId) === socket) connectedAgents.delete(projectId);
-      io.emit(SocketEvents.agentStatusChange, { projectId, status: 'offline' });
+      emitProject(projectId, SocketEvents.agentStatusChange, { projectId, status: 'offline' });
       // Runs this runner was executing can never finish now.
       for (const [sessionId, owner] of activeRuns) {
         if (owner !== socket) continue;
@@ -199,7 +271,7 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
             },
           })
           .catch((err: unknown) => console.error('[agent] failed to close orphaned run:', err));
-        pushUpdate(sessionId, 'session-completed', {
+        pushUpdate(projectId, sessionId, 'session-completed', {
           sessionId,
           status: 'FAILED',
           endReason: 'runner_disconnected',
@@ -212,7 +284,7 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
       const parsed = StepStartedEvent.safeParse(raw);
       if (!parsed.success) return logInvalid(SocketEvents.stepStarted, parsed.error);
       if (activeRuns.get(parsed.data.sessionId) !== socket) return;
-      pushUpdate(parsed.data.sessionId, 'step-started', parsed.data);
+      pushUpdate(projectId, parsed.data.sessionId, 'step-started', parsed.data);
     });
 
     socket.on(SocketEvents.stepCompleted, async (raw: unknown) => {
@@ -261,7 +333,10 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
         if (data.heal) await replays.recordHeal(session, data, screenshotUrl);
 
         await recordNetwork(prisma, session.projectId, step.id, data.networkRequests);
-        pushUpdate(session.id, 'step-completed', { ...step, networkLogs: data.networkRequests });
+        pushUpdate(session.projectId, session.id, 'step-completed', {
+          ...step,
+          networkLogs: data.networkRequests,
+        });
 
         const changes = await findings.recordStep(
           { id: session.id, projectId: session.projectId, persona: session.persona },
@@ -309,7 +384,7 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
 
         // A failed replay already says what diverged; no model call needed.
         if (data.status === 'FAILED' && session.mode !== 'replay') void runDiagnostics(session.id);
-        pushUpdate(session.id, 'session-completed', data);
+        pushUpdate(session.projectId, session.id, 'session-completed', data);
       } catch (err) {
         console.error('[agent] failed to complete session:', err);
       }
@@ -353,7 +428,7 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
       });
       if (!session) return;
       const diagnostics = await ai.generateDiagnosticsReport(session);
-      pushUpdate(sessionId, 'diagnostics-ready', { diagnostics });
+      pushUpdate(session.projectId, sessionId, 'diagnostics-ready', { diagnostics });
     } catch (err) {
       console.error('[ai] diagnostics failed:', err);
     }
@@ -374,8 +449,10 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
     res.json({ ...describeLlm(llm), usage: { allTime, last24h } });
   });
 
-  app.get('/api/projects', async (_req, res) => {
+  app.get('/api/projects', async (req, res) => {
+    const visible = await visibleProjectIds(prisma, req.principal ?? { kind: 'anonymous' });
     const projects = await prisma.project.findMany({
+      where: visible ? { id: { in: visible } } : undefined,
       include: {
         sessions: { orderBy: { startedAt: 'desc' }, take: 5 },
         _count: { select: { sessions: true, endpoints: true } },
@@ -390,7 +467,21 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
       res.status(400).json({ error: 'Project name is required (max 200 characters)' });
       return;
     }
-    const project = await prisma.project.create({ data: { name } });
+    const principal = req.principal ?? { kind: 'anonymous' as const };
+    const project = await prisma.project.create({
+      data: {
+        name,
+        // The creator owns the project.
+        ...(principal.kind === 'user'
+          ? { members: { create: { userId: principal.user.id, role: 'owner' } } }
+          : {}),
+      },
+    });
+    await audit.fromRequest(req, {
+      action: 'project.create',
+      projectId: project.id,
+      metadata: { name },
+    });
     res.status(201).json(project);
   });
 
@@ -433,6 +524,23 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
     } catch (err) {
       res.status(400).json({ error: `Invalid run configuration: ${(err as Error).message}` });
       return;
+    }
+    if (env.GHOSTIQ_HOSTED) {
+      // The runner browses every allowed origin: all of them must be public.
+      try {
+        for (const origin of [body.data.targetUrl, ...config.allowedOrigins])
+          await assertPublicUrl(origin, ssrf);
+      } catch (err) {
+        if (!(err instanceof BlockedTargetError)) throw err;
+        await audit.fromRequest(req, {
+          action: 'run.blocked_target',
+          projectId: body.data.projectId,
+          target: body.data.targetUrl,
+          metadata: { reason: err.message },
+        });
+        res.status(400).json({ error: err.message });
+        return;
+      }
     }
 
     const project = await prisma.project.findUnique({ where: { id: body.data.projectId } });
@@ -599,7 +707,7 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
       await fs.promises.writeFile(path.join(dir, 'trace.zip'), req.body);
       const traceUrl = `/artifacts/${session.id}/trace.zip`;
       await prisma.testSession.update({ where: { id: session.id }, data: { traceUrl } });
-      pushUpdate(session.id, 'trace-ready', { traceUrl });
+      pushUpdate(session.projectId, session.id, 'trace-ready', { traceUrl });
       res.status(201).json({ traceUrl });
     },
   );

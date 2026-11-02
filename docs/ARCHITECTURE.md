@@ -11,7 +11,7 @@ flowchart LR
     API[REST API<br/>Express 5]
     WS[Socket.IO hub]
     AI[AI service<br/>packages/llm]
-    DB[(SQLite via Prisma 7<br/>Postgres in Phase 7)]
+    DB[(SQLite via Prisma 7<br/>Postgres planned)]
     FS[(Screenshots)]
   end
   subgraph R["Runner agent (apps/runner)"]
@@ -159,10 +159,10 @@ Every provider call (initial, retry, repair or cache hit) is written to the `Llm
 
 ## Known limitations (tracked in `docs/PLAN.md`)
 
-- No authentication yet: anyone who can reach the server can drive a runner or call the planner (Phase 7).
+- With `GHOSTIQ_AUTH=off` (local default) there is no access control; shared deployments must turn sign-in on (see [SECURITY.md](SECURITY.md)).
 - Login is via `--storage-state` only (no scripted login prelude yet).
 - With a real model exploration is not deterministic; replays of a recorded run are.
 - Replay matches an element by role and name and takes the first match; repeated identical controls (two "Add to cart" buttons) are not told apart yet.
 - Pending replay batches live in server memory: a server restart leaves queued replays `PENDING`.
-- Events are broadcast to every dashboard (Phase 7: per-project rooms).
+- SQLite only (one server instance); Postgres and S3-compatible artifacts are planned (Phase 7b).
 - Without an LLM key, planning comes from the scripted demo responder (a mock provider), labelled `[demo]` everywhere. It exercises the same LLM pipeline as a real model.

@@ -86,6 +86,7 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
   const fetchSessions = async () => {
     try {
       const res = await fetch(`/api/projects/${project.id}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setSessions(data.sessions || []);
       if (data.sessions && data.sessions.length > 0 && !selectedSessionId) {
@@ -100,6 +101,8 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
   const fetchSessionDetail = async (id: string) => {
     try {
       const res = await fetch(`/api/sessions/${id}`);
+      // Keep the current view on errors (429, 403, network) instead of rendering garbage.
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setSessionDetail(data);
       // Auto expand failed steps

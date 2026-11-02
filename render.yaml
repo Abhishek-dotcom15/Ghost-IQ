@@ -1,0 +1,57 @@
+# Render Blueprint: GhostIQ server (+ dashboard), a runner, and the demo shop.
+# Deploy: Render dashboard -> New -> Blueprint -> this repository. See docs/DEPLOY.md.
+# Images come from GitHub Container Registry (published by .github/workflows/release.yml).
+services:
+  - type: web
+    name: ghostiq
+    runtime: image
+    image:
+      url: ghcr.io/abhishek-dotcom15/ghostiq-server:latest
+    plan: starter # a persistent disk needs a paid plan
+    healthCheckPath: /healthz
+    disk:
+      name: ghostiq-data
+      mountPath: /data
+      sizeGB: 2
+    envVars:
+      - key: GHOSTIQ_AUTH
+        value: 'on'
+      - key: GHOSTIQ_ADMIN_TOKEN
+        generateValue: true
+      - key: GHOSTIQ_PUBLIC_URL
+        sync: false # e.g. https://ghostiq.onrender.com
+      - key: GHOSTIQ_HOSTED
+        value: 'true'
+      - key: GHOSTIQ_TRUST_PROXY
+        value: '1'
+      - key: GHOSTIQ_RETENTION_DAYS
+        value: '30'
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: GHOSTIQ_GITHUB_ALLOWED_USERS
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false # empty = demo mode (scripted, no AI)
+
+  - type: worker
+    name: ghostiq-runner
+    runtime: image
+    image:
+      url: ghcr.io/abhishek-dotcom15/ghostiq-runner:latest
+    plan: starter
+    envVars:
+      - key: GHOSTIQ_SERVER_URL
+        sync: false # the ghostiq service URL
+      - key: GHOSTIQ_PROJECT_ID
+        sync: false # created in the dashboard after the first sign-in
+      - key: GHOSTIQ_API_KEY
+        sync: false # created under Access & Keys
+
+  - type: web
+    name: ghostiq-demo-shop
+    runtime: image
+    image:
+      url: ghcr.io/abhishek-dotcom15/ghostiq-mock-app:latest
+    plan: free
