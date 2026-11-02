@@ -149,8 +149,7 @@ await tab.pdf({
   printBackground: true,
   displayHeaderFooter: true,
   headerTemplate: '<span></span>',
-  footerTemplate:
-    '<div style="font-size:8px;width:100%;text-align:center;color:#888;font-family:Segoe UI,sans-serif">GhostIQ implementation plan · page <span class="pageNumber"></span> of <span class="totalPages"></span></div>',
+  footerTemplate: `<div style="font-size:8px;width:100%;text-align:center;color:#888;font-family:Segoe UI,sans-serif">${esc(title.replace(/ — .*$/, ''))} · page <span class="pageNumber"></span> of <span class="totalPages"></span></div>`,
   margin: { top: '16mm', bottom: '18mm', left: '15mm', right: '15mm' },
 });
 await browser.close();
