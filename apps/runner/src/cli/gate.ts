@@ -1,4 +1,4 @@
-import { SEVERITIES, SEVERITY_RANK, type Severity } from '@ghostiq/shared';
+import { SEVERITIES, SEVERITY_RANK, explainEndReason, type Severity } from '@ghostiq/shared';
 import type { Finding, Session } from './client.js';
 
 /** Process exit codes, stable for CI scripts. */
@@ -127,10 +127,19 @@ export function renderSummary(input: SummaryInput): string {
     '| --- | --- | --- | ---: | ---: |',
     ...input.runs.map(
       (r) =>
-        `| ${cell(r.persona)} | ${r.status === 'PASSED' ? '✅ passed' : r.status === 'FAILED' ? '❌ failed' : r.status} | \`${r.endReason ?? '-'}\` | ${Math.max(0, r.steps.length - 1)} | ${usd(r.llmUsage?.costUsd)} |`,
+        `| ${cell(r.persona)} | ${r.status === 'PASSED' ? '✅ passed' : r.status === 'FAILED' ? '❌ failed' : r.status} | ${cell(explainEndReason(r.endReason, { summary: r.summary })?.title ?? '-')} (\`${r.endReason ?? '-'}\`) | ${Math.max(0, r.steps.length - 1)} | ${usd(r.llmUsage?.costUsd)} |`,
     ),
     '',
   ];
+  // Runs that did not pass: what happened and what to do, in plain words.
+  for (const r of input.runs.filter((r) => r.status !== 'PASSED')) {
+    const why = explainEndReason(r.endReason, { summary: r.summary });
+    if (why)
+      lines.push(
+        `> **${cell(r.persona)}: ${why.title}.** ${why.detail}${why.fix ? ` _What to do:_ ${why.fix}` : ''}`,
+        '',
+      );
+  }
 
   if (input.findings.length === 0) {
     lines.push('No findings in these runs.');

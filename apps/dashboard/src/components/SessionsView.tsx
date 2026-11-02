@@ -15,6 +15,19 @@ import {
 import type { Socket } from 'socket.io-client';
 import { formatUsd, parseIssues } from '../lib/format';
 import ReplayPanel from './ReplayPanel';
+import ExplanationCard from './ExplanationCard';
+import { explainEndReason, explainStepError } from '@ghostiq/shared/explain';
+
+/** Max actions from the stored run config, for "ran out of N actions". */
+function maxStepsOf(configJson?: string | null): number | undefined {
+  try {
+    return configJson
+      ? (JSON.parse(configJson) as { budgets?: { maxSteps?: number } }).budgets?.maxSteps
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 interface SessionsViewProps {
   project: Project;
@@ -57,6 +70,10 @@ interface SessionDetail {
   traceUrl?: string | null;
   /** explore (planner-driven) or replay (re-run of replayOfId). */
   mode?: string;
+  /** RunConfig JSON (budgets, origins). */
+  configJson?: string | null;
+  /** Stored AI diagnosis (Markdown), when one was generated. */
+  diagnosticsMd?: string | null;
   replayOfId?: string | null;
   steps: TestStep[];
   /** Present on sessions fetched from the API (not on live socket updates). */
@@ -81,6 +98,24 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
   const [expandedSteps, setExpandedSteps] = useState<Record<number, boolean>>({});
   const [activeTab, setActiveTab] = useState<'trace' | 'visual' | 'a11y' | 'diagnostics'>('trace');
   const [aiReport, setAiReport] = useState<string | null>(null);
+  const [diagnosing, setDiagnosing] = useState(false);
+  const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
+
+  const requestDiagnosis = async () => {
+    if (!sessionDetail) return;
+    setDiagnosing(true);
+    setDiagnosisError(null);
+    try {
+      const res = await fetch(`/api/sessions/${sessionDetail.id}/diagnostics`, { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+      setAiReport(body.diagnostics);
+    } catch (err) {
+      setDiagnosisError((err as Error).message);
+    } finally {
+      setDiagnosing(false);
+    }
+  };
 
   // Load project sessions list
   const fetchSessions = async () => {
@@ -111,7 +146,8 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
         if (s.status === 'FAILED') expansions[s.stepNumber] = true;
       });
       setExpandedSteps(expansions);
-      setAiReport(null);
+      setAiReport(data.diagnosticsMd ?? null);
+      setDiagnosisError(null);
     } catch (err) {
       console.error('Failed to load session details:', err);
     }
@@ -369,7 +405,8 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: '300px 1fr',
+        // minmax(0, …): let columns shrink instead of overflowing on narrower screens.
+        gridTemplateColumns: '300px minmax(0, 1fr)',
         gap: '2rem',
         minHeight: '60vh',
         alignItems: 'start',
@@ -486,9 +523,15 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
             {/* Header Widget */}
             <div
               className="glass-card"
-              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '1rem',
+              }}
             >
-              <div>
+              <div style={{ flex: '1 1 320px', minWidth: 0 }}>
                 <span
                   className={`badge ${
                     sessionDetail.status === 'PASSED'
@@ -560,16 +603,6 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                     Goal: <span style={{ color: '#fff' }}>{sessionDetail.goal}</span>
                   </p>
                 )}
-                {sessionDetail.endReason && (
-                  <p style={{ fontSize: '0.8rem', marginTop: '0.35rem' }}>
-                    <code
-                      style={{ fontFamily: 'var(--font-mono)', color: 'hsl(var(--accent-purple))' }}
-                    >
-                      {sessionDetail.endReason}
-                    </code>{' '}
-                    <span style={{ color: 'hsl(var(--text-muted))' }}>{sessionDetail.summary}</span>
-                  </p>
-                )}
                 <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
                   {sessionDetail.status === 'RUNNING' && (
                     <button
@@ -619,7 +652,8 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
               <div
                 style={{
                   display: 'flex',
-                  gap: '1.5rem',
+                  flexWrap: 'wrap',
+                  gap: '1rem 1.5rem',
                   fontSize: '0.8rem',
                   color: 'hsl(var(--text-muted))',
                 }}
@@ -661,6 +695,19 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                 </div>
               </div>
             </div>
+
+            {/* How the run ended, in plain words (full width, under the header). */}
+            {sessionDetail.endReason &&
+              sessionDetail.status !== 'RUNNING' &&
+              sessionDetail.status !== 'PENDING' && (
+                <ExplanationCard
+                  explanation={explainEndReason(sessionDetail.endReason, {
+                    summary: sessionDetail.summary,
+                    maxSteps: maxStepsOf(sessionDetail.configJson),
+                  })!}
+                  technical={`${sessionDetail.endReason}${sessionDetail.summary ? `: ${sessionDetail.summary}` : ''}`}
+                />
+              )}
 
             <ReplayPanel
               session={sessionDetail}
@@ -705,7 +752,7 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: '1.5fr 1fr',
+                gridTemplateColumns: 'minmax(0, 2fr) minmax(200px, 1fr)',
                 gap: '1.5rem',
                 alignItems: 'start',
               }}
@@ -719,10 +766,10 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                 <div
                   style={{
                     display: 'flex',
-                    gap: '1rem',
+                    flexWrap: 'wrap',
+                    gap: '0.5rem 1rem',
                     borderBottom: '1px solid var(--border-glass)',
                     paddingBottom: '0.75rem',
-                    overflowX: 'auto',
                   }}
                 >
                   <button
@@ -988,7 +1035,14 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                                 </div>
                               )}
 
-                              {step.error && (
+                              {step.error && explainStepError(step.error) && (
+                                <ExplanationCard
+                                  compact
+                                  explanation={explainStepError(step.error)!}
+                                  technical={step.error}
+                                />
+                              )}
+                              {step.error && !explainStepError(step.error) && (
                                 <div
                                   style={{
                                     background: 'rgba(244, 63, 94, 0.08)',
@@ -1405,52 +1459,112 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                       padding: '0.5rem',
                     }}
                   >
-                    {aiReport || sessionDetail.steps.some((s) => s.status === 'FAILED') ? (
-                      <div
-                        className="glass-card"
-                        style={{
-                          background: 'rgba(139, 92, 246, 0.02)',
-                          border: '1px solid rgba(139, 92, 246, 0.15)',
-                          padding: '1.5rem',
-                          borderRadius: 'var(--radius-md)',
-                        }}
-                      >
+                    {sessionDetail.status === 'RUNNING' || sessionDetail.status === 'PENDING' ? (
+                      <p style={{ color: 'hsl(var(--text-muted))', fontSize: '0.9rem' }}>
+                        The run is still in progress. Its diagnosis appears here when it ends.
+                      </p>
+                    ) : (
+                      <>
+                        {/* Rule-based: always available, no AI needed. */}
+                        <h4 style={{ fontFamily: 'var(--font-title)', fontSize: '0.95rem' }}>
+                          Why the run ended
+                        </h4>
+                        {sessionDetail.endReason && (
+                          <ExplanationCard
+                            explanation={explainEndReason(sessionDetail.endReason, {
+                              summary: sessionDetail.summary,
+                              maxSteps: maxStepsOf(sessionDetail.configJson),
+                            })!}
+                          />
+                        )}
+                        {sessionDetail.steps.filter((s) => s.status === 'FAILED' && s.error)
+                          .length > 0 && (
+                          <>
+                            <h4 style={{ fontFamily: 'var(--font-title)', fontSize: '0.95rem' }}>
+                              Failed steps
+                            </h4>
+                            {sessionDetail.steps
+                              .filter((s) => s.status === 'FAILED' && s.error)
+                              .slice(0, 5)
+                              .map((s) => (
+                                <div
+                                  key={s.stepNumber}
+                                  style={{
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.3rem',
+                                  }}
+                                >
+                                  <span
+                                    style={{ fontSize: '0.8rem', color: 'hsl(var(--text-muted))' }}
+                                  >
+                                    Step {s.stepNumber}: {s.description}
+                                  </span>
+                                  <ExplanationCard
+                                    compact
+                                    explanation={
+                                      explainStepError(s.error) ?? {
+                                        title: 'The action failed',
+                                        detail:
+                                          'The browser reported an error for this action (see Technical detail).',
+                                        tone: 'warning',
+                                      }
+                                    }
+                                    technical={s.error}
+                                  />
+                                </div>
+                              ))}
+                          </>
+                        )}
+
+                        {/* AI root-cause report: stored with the run, or generated on request. */}
+                        <h4 style={{ fontFamily: 'var(--font-title)', fontSize: '0.95rem' }}>
+                          AI root-cause analysis
+                        </h4>
                         {aiReport ? (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          <div
+                            className="glass-card"
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.5rem',
+                              padding: '1.25rem',
+                            }}
+                          >
                             {renderSimpleMarkdown(aiReport)}
                           </div>
+                        ) : sessionDetail.status === 'PASSED' ? (
+                          <p style={{ color: 'hsl(var(--text-muted))', fontSize: '0.85rem' }}>
+                            This run passed, so there is nothing to diagnose. Its findings are in
+                            the Findings page.
+                          </p>
                         ) : (
                           <div
                             style={{
                               display: 'flex',
                               flexDirection: 'column',
-                              alignItems: 'center',
-                              gap: '1rem',
-                              padding: '2rem 0',
+                              gap: '0.5rem',
+                              alignItems: 'flex-start',
                             }}
                           >
-                            <div
-                              className="pulse-running"
-                              style={{ width: '12px', height: '12px' }}
-                            ></div>
-                            <span style={{ fontSize: '0.85rem', color: 'hsl(var(--text-muted))' }}>
-                              Gemini is analyzing DOM hierarchy, visual state, and console traces.
-                              Building diagnostics...
-                            </span>
+                            <button
+                              className="btn btn-secondary"
+                              disabled={diagnosing}
+                              onClick={() => void requestDiagnosis()}
+                            >
+                              {diagnosing ? 'Asking the model…' : 'Ask the AI to diagnose this run'}
+                            </button>
+                            {diagnosisError && (
+                              <p
+                                role="alert"
+                                style={{ color: 'hsl(var(--warning))', fontSize: '0.85rem' }}
+                              >
+                                {diagnosisError}
+                              </p>
+                            )}
                           </div>
                         )}
-                      </div>
-                    ) : (
-                      <div
-                        style={{
-                          textAlign: 'center',
-                          padding: '3rem 1rem',
-                          color: 'hsl(var(--text-muted))',
-                          fontSize: '0.9rem',
-                        }}
-                      >
-                        Diagnostics only available for failed test runs.
-                      </div>
+                      </>
                     )}
                   </div>
                 )}

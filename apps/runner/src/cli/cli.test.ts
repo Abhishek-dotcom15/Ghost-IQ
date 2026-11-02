@@ -165,7 +165,9 @@ describe('renderSummary', () => {
     expect(md.startsWith(SUMMARY_MARKER)).toBe(true);
     expect(md).toContain('❌ Failed: 1 finding(s) at or above "high"');
     expect(md).toContain('**demo mode**');
-    expect(md).toContain('| Happy Path User | ✅ passed | `goal_met` | 0 | $0.0021 |');
+    expect(md).toContain(
+      '| Happy Path User | ✅ passed | Goal reached (`goal_met`) | 0 | $0.0021 |',
+    );
     expect(md).toContain('🟠 1 high · 🔵 1 low');
     expect(md).toContain('Missing \\| pipe');
     expect(md).toContain('[CI run and report artifacts](https://github.com/o/r/actions/runs/1)');

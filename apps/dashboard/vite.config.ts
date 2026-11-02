@@ -13,6 +13,9 @@ export default defineConfig({
       '/api': { target: apiTarget, changeOrigin: true },
       '/healthz': { target: apiTarget, changeOrigin: true },
       '/screenshots': { target: apiTarget, changeOrigin: true },
+      // Traces, visual-diff and baseline images; sign-in.
+      '/artifacts': { target: apiTarget, changeOrigin: true },
+      '/auth': { target: apiTarget, changeOrigin: true },
       '/socket.io': { target: apiTarget, ws: true, changeOrigin: true },
     },
   },

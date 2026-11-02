@@ -420,19 +420,61 @@ export function createApp({
     }
   }
 
-  async function runDiagnostics(sessionId: string) {
+  /**
+   * AI root-cause report for a failed run, stored on the run so it survives reloads.
+   * Demo mode has no model to ask: the dashboard shows the rule-based explanation instead.
+   */
+  async function runDiagnostics(sessionId: string): Promise<string | null> {
     try {
+      if (llm.mode === 'demo') return null;
       const session = await prisma.testSession.findUnique({
         where: { id: sessionId },
         include: { steps: { orderBy: { stepNumber: 'asc' }, include: { networkLogs: true } } },
       });
-      if (!session) return;
+      if (!session) return null;
       const diagnostics = await ai.generateDiagnosticsReport(session);
+      await prisma.testSession.update({
+        where: { id: sessionId },
+        data: { diagnosticsMd: diagnostics },
+      });
       pushUpdate(session.projectId, sessionId, 'diagnostics-ready', { diagnostics });
+      return diagnostics;
     } catch (err) {
       console.error('[ai] diagnostics failed:', err);
+      return null;
     }
   }
+
+  /** Generate (or regenerate) the AI diagnosis of a finished run on request. */
+  app.post('/api/sessions/:id/diagnostics', async (req, res) => {
+    const session = await prisma.testSession.findUnique({ where: { id: req.params.id } });
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    if (session.status === 'RUNNING' || session.status === 'PENDING') {
+      res
+        .status(409)
+        .json({ error: 'The run is still in progress; diagnose it once it has finished.' });
+      return;
+    }
+    if (llm.mode === 'demo') {
+      res.status(409).json({
+        error:
+          'AI diagnosis needs a model: GhostIQ is in demo mode (no API key). Add e.g. GEMINI_API_KEY to apps/server/.env and restart the server.',
+        demo: true,
+      });
+      return;
+    }
+    const diagnostics = await runDiagnostics(session.id);
+    if (!diagnostics) {
+      res
+        .status(502)
+        .json({ error: 'The model did not return a diagnosis; see Settings for its status.' });
+      return;
+    }
+    res.json({ diagnostics });
+  });
 
   // ------------------------------------------------------------------- REST
   app.get('/healthz', (_req, res) => {

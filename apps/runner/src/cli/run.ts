@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { explainEndReason } from '@ghostiq/shared';
 import { startAgent, type AgentHandle } from '../agent.js';
 import { VERSION } from '../version.js';
 import { ApiError, GhostiqClient, UnreachableError, type Session } from './client.js';
@@ -91,6 +92,16 @@ export async function runCommand(
       });
       runs.push(finished);
       log(`  ⇒ ${finished.status} (${finished.endReason}) ${finished.summary ?? ''}`);
+      if (finished.status !== 'PASSED') {
+        const why = explainEndReason(finished.endReason, {
+          summary: finished.summary,
+          maxSteps: config.budgets?.maxSteps,
+        });
+        if (why) {
+          log(`    ${why.title}: ${why.detail}`);
+          if (why.fix) log(`    What to do: ${why.fix}`);
+        }
+      }
     }
 
     const ids = runs.map((r) => r.id);

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import type { Project } from '../App';
 import { PlayCircle, ShieldAlert, CheckCircle, Database, Network } from 'lucide-react';
 import { fetchPersonas, type PersonaView } from '../lib/personas';
+import { explainEndReason } from '@ghostiq/shared/explain';
 
 interface DashboardViewProps {
   project: Project;
@@ -542,6 +543,19 @@ export default function DashboardView({ project, refresh }: DashboardViewProps) 
                       {new Date(session.startedAt).toLocaleTimeString()}
                     </span>
                   </div>
+                  {session.status !== 'PASSED' &&
+                    session.status !== 'RUNNING' &&
+                    session.endReason && (
+                      <div style={{ fontSize: '0.8rem', color: 'hsl(var(--text-primary))' }}>
+                        <strong>
+                          {explainEndReason(session.endReason, { summary: session.summary })?.title}
+                        </strong>
+                        <span style={{ color: 'hsl(var(--text-muted))' }}>
+                          {' '}
+                          · details and what to do in Test Sessions
+                        </span>
+                      </div>
+                    )}
 
                   <div
                     style={{

@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./explain": {
+      "types": "./dist/explain.d.ts",
+      "default": "./dist/explain.js"
     }
   },
   "files": [
