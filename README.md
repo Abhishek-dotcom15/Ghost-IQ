@@ -178,7 +178,7 @@ packages/
 examples/
   mock-target-app/   demo shop with 33 labelled bugs (bugs.json)
 scripts/smoke.mjs    end-to-end smoke test
-docs/                PLAN.md, ARCHITECTURE.md, PERSONAS.md, EVALUATION.md, CI.md, SECURITY.md, DEPLOY.md
+docs/                PLAN.md, IMPLEMENTATION_PLAN.md (+ PDF), ARCHITECTURE.md, PERSONAS.md, EVALUATION.md, CI.md, SECURITY.md, DEPLOY.md
 scripts/bench-bugs.mjs  seeded-bug benchmark (recall / precision against bugs.json)
 scripts/cli-e2e.mjs     end-to-end check of the ghostiq CLI and MCP server
 scripts/check-dashboard.mjs  every dashboard page in a browser: console errors, failed requests, broken links

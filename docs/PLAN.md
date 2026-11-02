@@ -1,5 +1,7 @@
 # GhostIQ — Build Plan (v2)
 
+**Remaining work (Phases 7b, 8, 9) is planned in detail in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) (also as `GhostIQ_Implementation_Plan.pdf`).**
+
 Status: Phases 0-7 complete (v0.9.0; Postgres, S3 and the live demo URL deferred to 7b). Next: Phase 8 (evaluation and launch). Last updated: 2026-11-02.
 
 **Phase 7 result:** sign-in (GitHub OAuth with an allow-list, bootstrap admin token), server-side sessions (hashed tokens, HttpOnly/SameSite cookies, CSRF origin check), project roles (owner/member/viewer) enforced by one deny-by-default access layer (API, evidence files, sockets), hashed project API keys for runners/CLI/CI/Action, per-project Socket.IO rooms, rate limits, audit log (+ dashboard), hosted-mode SSRF guard, security headers, retention that never breaks finding evidence, public read-only projects, `docs/SECURITY.md` checklist, `docs/DEPLOY.md` + `render.yaml`. Verified by 34 security tests and `scripts/auth-e2e.mjs` (runner refused without key, run/trace/CLI with key, evidence access, login screen, public demo, audit). **Deferred (7b):** Postgres (Prisma clients are provider-specific; nothing to test against on this machine), S3-compatible artifact storage, and the public demo URL (needs a hosting account: `render.yaml` is ready).
