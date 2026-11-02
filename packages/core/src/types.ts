@@ -1,6 +1,8 @@
 import type {
   AgentAction,
   EndReason,
+  FinalState,
+  HealInfo,
   HistoryItem,
   NetworkRequestRecord,
   NextActionRequest,
@@ -48,11 +50,26 @@ export interface PlanResult {
   action: AgentAction;
   /** Tokens spent deciding (counted against the token budget). */
   tokens: number;
+  /** Replay: the value was fixed in advance (do not generate one); its provenance. */
+  input?: StepCompletedEvent['input'];
+  /** Replay: the target was found by the heal ladder, not by its recorded locator. */
+  heal?: HealInfo;
+  /** A check made before this decision, recorded as its own ASSERT step. */
+  check?: { description: string; passed: boolean; error?: string; issue?: StepIssue };
+  /** Overrides the end reason of a `finish` that did not meet the goal. */
+  endReason?: EndReason;
 }
 
-/** Chooses the next action. The runner implements it by calling the control plane. */
+/**
+ * Chooses the next action. The runner implements it by calling the control plane; replay
+ * implements it from a recording (and needs the parsed page, hence `observation`).
+ */
 export interface Planner {
-  next(request: NextActionRequest, signal: AbortSignal): Promise<PlanResult>;
+  next(
+    request: NextActionRequest,
+    signal: AbortSignal,
+    observation: Observation,
+  ): Promise<PlanResult>;
 }
 
 export interface AgentEvents {
@@ -65,6 +82,8 @@ export interface RunOutcome {
   endReason: EndReason;
   summary: string;
   stats: RunStats;
+  /** Set when the goal was met: the page state that counted as success. */
+  finalState?: FinalState;
 }
 
 export interface AgentOptions {

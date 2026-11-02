@@ -22,6 +22,7 @@ apps/server/public/screenshots/
 apps/server/public/artifacts/
 artifacts/
 evals/results/
+evals/export-check/
 test-results/
 playwright-report/
 

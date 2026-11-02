@@ -9,12 +9,31 @@
 different user personas through your web app (localhost, staging or production), watches
 network traffic, console errors and accessibility, and reports what broke with evidence.
 
-> **Status: v0.6 — findings engine.** Phases 0–4 of [the build plan](docs/PLAN.md) are done: an
-> agent core with guardrails, eight personas as YAML, and 15 oracles that turn what the agent sees
-> into deduplicated, severity-ranked findings with evidence and repro steps. On the bundled
-> seeded-bug benchmark, all eight personas together find **29 of 33 bugs (94% of the detectable
-> ones) at 90% precision** — measured in demo mode, see [docs/EVALUATION.md](docs/EVALUATION.md)
-> for what that does and does not mean. Next: replay and Playwright export (Phase 5).
+> **Status: v0.7 — replay, healing, export, analytics.** Phases 0–5 of [the build plan](docs/PLAN.md)
+> are done: an agent core with guardrails, eight personas as YAML, 15 oracles that turn what the
+> agent sees into deduplicated findings, and now **explore once, replay forever**: a successful run
+> replays without an LLM, heals renamed controls (with human review), exports as a plain Playwright
+> test, and measures real flakiness. On the bundled seeded-bug benchmark, all eight personas
+> together find **29 of 33 bugs (94% of the detectable ones) at 90% precision** — measured in demo
+> mode, see [docs/EVALUATION.md](docs/EVALUATION.md) for what that does and does not mean.
+> Next: CLI and GitHub Action (Phase 6).
+
+## Explore once, replay forever
+
+1. **Explore.** A persona reaches a goal with the LLM planner. GhostIQ records each action with a
+   role + accessible-name locator, the values typed, and the end state.
+2. **Replay** (Test Sessions → _Replay_, 1-10 runs). The recorded actions run again with **no
+   planner model**: deterministic, free, fast. Each step must start on the page the recording was
+   on, and the run must end in the same state; a difference fails the replay as a
+   _flow regression_.
+3. **Heal.** If a control was renamed, the replay looks for the same role with a similar name,
+   then asks the model (accepted only at ≥ 85% confidence with a compatible role). Heals wait in
+   **Heal Review** with before/after screenshots; approved ones are used from then on. URLs and
+   end states are never healed.
+4. **Export** a run as a self-contained `.spec.ts` (`@playwright/test` only, no GhostIQ needed).
+5. **Flakiness** comes from replays only (same actions and values), so it measures the app, not
+   the model. **Analytics** shows route coverage per persona, findings per day, cost per finding,
+   endpoint p95 and the false-heal rate.
 
 ## Findings
 
@@ -116,7 +135,8 @@ shows its own AI cost.
 | Evidence      | Console errors, uncaught exceptions, 5xx and failed requests recorded per step as issues (the run keeps going); screenshot per step; Playwright trace per run                                                        |
 | Runner agent  | Connects out to the server (works on localhost), optional `--storage-state` to start logged in, `--headed` to watch                                                                                                  |
 | Telemetry     | Per-request latency and status for fetch/XHR, aggregated per endpoint                                                                                                                                                |
-| Accessibility | Three built-in checks per step (axe-core/WCAG arrives in Phase 4)                                                                                                                                                    |
+| Accessibility | axe-core (WCAG 2.0-2.2 A/AA) whenever the page content changes                                                                                                                                                       |
+| Replay        | No-LLM replay of recorded runs, heal ladder with review queue, Playwright export, replay-based flakiness, analytics                                                                                                  |
 | LLM layer     | Gemini, Claude, OpenAI-compatible and Ollama behind one interface; schema-validated output with one repair retry; backoff retries; fallback chain; per-call cost metering; boot health check; record/replay fixtures |
 | Dashboard     | Live step trace, baseline screenshot comparison, endpoint charts, AI failure report                                                                                                                                  |
 | Engineering   | pnpm monorepo, strict TypeScript, shared zod contract, ESLint/Prettier, Vitest unit + integration tests, end-to-end smoke test, CI, Docker images                                                                    |

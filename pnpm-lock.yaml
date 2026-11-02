@@ -169,6 +169,9 @@ importers:
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.13.0(jiti@2.7.0))
+      '@playwright/test':
+        specifier: 1.64.1
+        version: 1.64.1
       '@types/node':
         specifier: ^24.19.2
         version: 24.19.2
@@ -741,6 +744,11 @@ packages:
 
   '@paralleldrive/cuid2@2.3.1':
     resolution: {integrity: sha512-XO7cAxhnTZl0Yggq6jOgjiOHhbgcO4NqFqwSmQpjK3b6TEE6Uj/jfSk6wzYyemh3+I0sHirKSetjQwn5cZktFw==}
+
+  '@playwright/test@1.64.1':
+    resolution: {integrity: sha512-IaYGml/nSOiZWROfPtuIL7neuu9qDOZ3TNvNljUIrhDMxiGTgPjzj/g9p9RxpS2tSepPDRY+UwAaEeiKtUvIAg==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   '@prisma/adapter-better-sqlite3@7.10.1':
     resolution: {integrity: sha512-iD7UgO7/wSrslDdb0WvRSBS5v36KRCL3biTrCuGetbR/IIKL+PxyGgiZlfMyqY2yjAfS+tXWXkFVVkiESiXskQ==}
@@ -3200,6 +3208,10 @@ snapshots:
   '@paralleldrive/cuid2@2.3.1':
     dependencies:
       '@noble/hashes': 1.8.0
+
+  '@playwright/test@1.64.1':
+    dependencies:
+      playwright: 1.64.1
 
   '@prisma/adapter-better-sqlite3@7.10.1':
     dependencies:

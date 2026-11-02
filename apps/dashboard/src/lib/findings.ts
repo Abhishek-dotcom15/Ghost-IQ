@@ -65,6 +65,8 @@ export const TYPE_LABELS: Record<string, string> = {
   layout_shift: 'Layout shift',
   slow_page: 'Slow page',
   visual_regression: 'Visual regression',
+  ui_change: 'UI change (healed locator)',
+  flow_regression: 'Flow regression (replay)',
 };
 
 export async function fetchFindings(

@@ -31,8 +31,19 @@ let cart = [];
 const orders = [];
 const users = [];
 
+// Test-only UI change (POST /__ui): the login button's label, to exercise replay healing.
+const DEFAULT_LOGIN_LABEL = 'Sign In';
+let loginLabel = DEFAULT_LOGIN_LABEL;
+const fs = require('fs');
+
 // ---------------------------------------------------------------- pages
-app.get('/', page('index.html'));
+app.get('/', (req, res) => {
+  if (loginLabel === DEFAULT_LOGIN_LABEL) return page('index.html')(req, res);
+  const html = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  res
+    .type('html')
+    .send(html.replace(`>${DEFAULT_LOGIN_LABEL}</button>`, `>${loginLabel}</button>`));
+});
 app.get('/products', page('products.html'));
 app.get('/products/:id', (req, res) => {
   // BUG-BROKEN-LINK-PRODUCT99: the catalogue links to a product that does not exist.
@@ -159,7 +170,15 @@ app.post('/__reset', (_req, res) => {
   cart = [];
   orders.length = 0;
   users.length = 0;
+  loginLabel = DEFAULT_LOGIN_LABEL;
   res.json({ ok: true });
+});
+
+// Test-only: simulate a UI change (renamed login button) without restarting.
+app.post('/__ui', (req, res) => {
+  const label = typeof req.body?.loginLabel === 'string' ? req.body.loginLabel.slice(0, 40) : '';
+  loginLabel = label.replace(/[<>&"]/g, '') || DEFAULT_LOGIN_LABEL;
+  res.json({ ok: true, loginLabel });
 });
 
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));

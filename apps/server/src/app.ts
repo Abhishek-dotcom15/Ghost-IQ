@@ -6,6 +6,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { Server, type Socket } from 'socket.io';
 import { LlmError } from '@ghostiq/llm';
 import {
+  HealLocatorRequest,
   NextActionRequest,
   RunConfig,
   SessionCompletedEvent,
@@ -22,7 +23,10 @@ import type { PrismaClient } from './db.js';
 import type { Env } from './env.js';
 import { FindingsEngine, type FindingChange } from './findings/engine.js';
 import { registerFindingRoutes } from './findings/routes.js';
-import { computeFlakinessScore, updateRunningAverage } from './lib/flakiness.js';
+import { registerExportRoutes } from './export/routes.js';
+import { registerAnalyticsRoutes } from './analytics/routes.js';
+import { updateRunningAverage } from './lib/flakiness.js';
+import { ReplayService, registerReplayRoutes } from './replay/service.js';
 import { describeLlm, type LlmRuntime } from './llm.js';
 import type { AiService } from './services/ai.js';
 import {
@@ -149,6 +153,23 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
   const pushUpdate = (sessionId: string, type: string, data: unknown) =>
     io.emit(SocketEvents.sessionUpdate(sessionId), { type, data });
 
+  /** Hands a run to the project's runner; false when none is connected. */
+  const dispatch = (projectId: string, command: RunTestCommand): boolean => {
+    const socket = connectedAgents.get(projectId);
+    if (!socket) return false;
+    activeRuns.set(command.sessionId, socket);
+    socket.emit(SocketEvents.runStart, command);
+    return true;
+  };
+  const replays = new ReplayService(prisma, {
+    dispatch,
+    online: (projectId) => connectedAgents.has(projectId),
+    notify: (event, data) => io.emit(event, data),
+  });
+  void replays
+    .resetLegacyFlakiness()
+    .catch((err: unknown) => console.error('[replay] flakiness cleanup failed:', err));
+
   // ---------------------------------------------------------------- sockets
   io.on('connection', (socket) => {
     const { role, projectId } = socket.handshake.query;
@@ -233,8 +254,10 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
             issuesJson: data.issues.length ? JSON.stringify(data.issues) : null,
             behavior: data.behavior ?? null,
             inputJson: data.input ? JSON.stringify(data.input) : null,
+            healed: !!data.heal,
           },
         });
+        if (data.heal) await replays.recordHeal(session, data, screenshotUrl);
 
         await recordNetwork(prisma, session.projectId, step.id, data.networkRequests);
         pushUpdate(session.id, 'step-completed', { ...step, networkLogs: data.networkRequests });
@@ -267,24 +290,13 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
             status: data.status,
             endReason: data.endReason,
             summary: data.summary,
+            finalStateJson: data.finalState ? JSON.stringify(data.finalState) : null,
             endedAt: new Date(),
           },
         });
 
-        const history = await prisma.testSession.findMany({
-          where: {
-            projectId: session.projectId,
-            targetUrl: session.targetUrl,
-            persona: session.persona,
-            status: { in: ['PASSED', 'FAILED'] },
-          },
-          orderBy: { startedAt: 'asc' },
-          select: { status: true },
-        });
-        await prisma.testSession.update({
-          where: { id: session.id },
-          data: { flakinessScore: computeFlakinessScore(history.map((h) => h.status)) },
-        });
+        // Flakiness is measured on replays only (explore runs vary with the model, not the app).
+        await replays.onSessionFinished(session);
 
         const persona = session.personaId ? await personas.get(session.personaId) : null;
         const runLevel = await findings.finalizeSession(session.id, {
@@ -292,7 +304,8 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
         });
         if (runLevel.length) announceFindings(session.id, session.projectId, runLevel);
 
-        if (data.status === 'FAILED') void runDiagnostics(session.id);
+        // A failed replay already says what diverged; no model call needed.
+        if (data.status === 'FAILED' && session.mode !== 'replay') void runDiagnostics(session.id);
         pushUpdate(session.id, 'session-completed', data);
       } catch (err) {
         console.error('[agent] failed to complete session:', err);
@@ -407,8 +420,7 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
       });
       return;
     }
-    const agentSocket = connectedAgents.get(project.id);
-    if (!agentSocket) {
+    if (!connectedAgents.has(project.id)) {
       res.status(409).json({
         error: `No runner agent is online for this project. Start one with: pnpm --filter @ghostiq/runner start -k ${project.id}`,
       });
@@ -424,6 +436,7 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
         targetUrl: body.data.targetUrl,
         persona: persona.name,
         personaId: persona.id,
+        personaJson: JSON.stringify(persona.spec),
         seed,
         goal,
         configJson: JSON.stringify(config),
@@ -439,8 +452,7 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
       goal,
       config,
     };
-    activeRuns.set(session.id, agentSocket);
-    agentSocket.emit(SocketEvents.runStart, command);
+    dispatch(project.id, command);
     res.status(201).json(session);
   });
 
@@ -575,6 +587,21 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
     }
   });
 
+  /** Heal ladder, model rung (replays only). */
+  app.post('/api/ai/heal-locator', async (req, res) => {
+    const parsed = HealLocatorRequest.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { kind: 'bad_request', message: parsed.error.message } });
+      return;
+    }
+    try {
+      res.json(await ai.healLocator(parsed.data));
+    } catch (err) {
+      const e = err instanceof LlmError ? err : new LlmError('unknown', String(err));
+      res.status(502).json({ error: { kind: e.kind, message: e.message } });
+    }
+  });
+
   app.post('/api/sessions/:id/set-baseline', async (req, res) => {
     const session = await prisma.testSession.findUnique({ where: { id: req.params.id } });
     if (!session) {
@@ -599,6 +626,9 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
   });
 
   registerFindingRoutes(app, prisma);
+  registerExportRoutes(app, prisma);
+  registerReplayRoutes(app, prisma, replays);
+  registerAnalyticsRoutes(app, prisma);
 
   app.get('/api/projects/:id/baseline', async (req, res) => {
     const { targetUrl, persona } = req.query;

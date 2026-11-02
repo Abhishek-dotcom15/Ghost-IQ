@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import type { Socket } from 'socket.io-client';
 import { formatUsd, parseIssues } from '../lib/format';
+import ReplayPanel from './ReplayPanel';
 
 interface SessionsViewProps {
   project: Project;
@@ -54,6 +55,9 @@ interface SessionDetail {
   endReason?: string | null;
   summary?: string | null;
   traceUrl?: string | null;
+  /** explore (planner-driven) or replay (re-run of replayOfId). */
+  mode?: string;
+  replayOfId?: string | null;
   steps: TestStep[];
   /** Present on sessions fetched from the API (not on live socket updates). */
   llmUsage?: {
@@ -614,14 +618,6 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                   color: 'hsl(var(--text-muted))',
                 }}
               >
-                {sessionDetail.flakinessScore > 0 && (
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                    <span>Flakiness Index</span>
-                    <strong style={{ color: 'hsl(var(--danger))', marginTop: '0.1rem' }}>
-                      {Math.round(sessionDetail.flakinessScore)}%
-                    </strong>
-                  </div>
-                )}
                 {sessionDetail.llmUsage && sessionDetail.llmUsage.calls > 0 && (
                   <div
                     style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}
@@ -659,6 +655,15 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                 </div>
               </div>
             </div>
+
+            <ReplayPanel
+              session={sessionDetail}
+              socket={socket}
+              onOpenSession={(id) => {
+                setSelectedSessionId(id);
+                void fetchSessions();
+              }}
+            />
 
             {/* Live screen stream & loading indicators */}
             {sessionDetail.status === 'RUNNING' && (

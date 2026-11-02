@@ -23,6 +23,8 @@ export const FINDING_TYPES = [
   'layout_shift',
   'slow_page',
   'visual_regression',
+  'ui_change',
+  'flow_regression',
 ] as const;
 export type FindingType = (typeof FINDING_TYPES)[number];
 
@@ -64,6 +66,8 @@ export const FINDING_TYPE_LABELS: Record<FindingType, string> = {
   layout_shift: 'Layout shift',
   slow_page: 'Slow page',
   visual_regression: 'Visual regression',
+  ui_change: 'UI change (healed locator)',
+  flow_regression: 'Flow regression (replay)',
 };
 
 // Numbers, UUIDs, long hex, and long tokens that contain a digit (not long readable slugs).

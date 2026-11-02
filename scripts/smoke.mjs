@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { runExportedSpec } from './lib/export-check.mjs';
 
 const { values: args } = parseArgs({
   options: {
@@ -118,6 +119,46 @@ async function runOnce(index, { personaId = args.persona, seed, goal = args.goal
   return withTrace;
 }
 
+/** Starts N replays of a recorded run and waits for each (they run one after another). */
+async function replay(sourceId, runs) {
+  const res = await fetch(`${SERVER}/api/sessions/${sourceId}/replay`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ runs }),
+  });
+  const body = await res.json();
+  assert(res.status === 201, `replay accepted (${res.status}: ${JSON.stringify(body)})`);
+  const done = [];
+  for (const s of body.sessions) {
+    const r = await waitFor(
+      `replay ${s.id}`,
+      async () => {
+        const x = await getJson(`${SERVER}/api/sessions/${s.id}`);
+        return ['PENDING', 'RUNNING'].includes(x.status) ? null : x;
+      },
+      120_000,
+    );
+    console.log(`${r.name}: ${r.status} (${r.endReason}) - ${r.summary}`);
+    for (const st of r.steps) {
+      console.log(
+        `  ${st.stepNumber}. ${st.action.padEnd(8)} ${st.status.padEnd(7)} ${st.description}${st.healed ? ' [healed]' : ''}`,
+      );
+    }
+    done.push(r);
+  }
+  return done;
+}
+
+/** Mock app test hook: renames the login button (empty = default). */
+async function setLoginLabel(loginLabel) {
+  const res = await fetch(`${TARGET}/__ui`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ loginLabel }),
+  });
+  assert(res.ok, 'mock UI switch');
+}
+
 async function main() {
   const llmEnv = args.live ? {} : { GHOSTIQ_LLM_PROVIDER: 'mock' };
   start('mock', 'examples/mock-target-app', ['server.js']);
@@ -202,6 +243,77 @@ async function main() {
     assert(a.steps[1].value !== 'testuser@ghostiq.io', 'form stress persona used generated input');
     assert(fingerprint(a) === fingerprint(b), 'same seed reproduced the same inputs and behaviors');
     assert(fingerprint(a) !== fingerprint(c), 'a different seed produced different inputs');
+
+    // Explore once, replay forever: the recorded run exported as a plain Playwright test.
+    console.log('\n--- Export: recorded login run -> .spec.ts -> plain Playwright ---');
+    const exportRes = await fetch(`${SERVER}/api/sessions/${run.id}/export/spec?format=json`);
+    const exported = await exportRes.json();
+    assert(exportRes.ok, 'export endpoint works');
+    assert(
+      !exported.code.includes('••••••'),
+      'masked password was regenerated, not exported as the mask',
+    );
+    assert(exported.secrets.length === 0, 'no secrets needed');
+    assert(exported.code.includes('toBeVisible()'), 'the exported test asserts the goal state');
+    const check = runExportedSpec('smoke-login', exported.code);
+    if (!check.passed) console.log(check.output);
+    assert(check.passed, `exported spec passes in plain Playwright (${check.file})`);
+    console.log(`Exported spec passed in plain Playwright: ${path.relative(root, check.file)}`);
+
+    // Replay: the same recorded actions, no planner model, checked against the end state.
+    console.log('\n--- Replay: recorded login run x2 (no LLM) ---');
+    const plain = await replay(run.id, 2);
+    assert(
+      plain.every((r) => r.status === 'PASSED' && r.endReason === 'goal_met'),
+      `replays pass (${plain.map((r) => r.endReason)})`,
+    );
+    assert(
+      plain.every((r) => r.llmUsage.calls === 0),
+      'replays made no LLM calls',
+    );
+    assert(plain[0].steps.at(-1).action === 'ASSERT', 'replay ends with the end-state check');
+    const stats = await getJson(`${SERVER}/api/sessions/${run.id}/replays`);
+    assert(stats.passed >= 2 && stats.flakinessScore === 0, 'consistent replays are not flaky');
+
+    // Heal: the login button is renamed; the replay finds it by similar name and queues a heal.
+    console.log('\n--- Heal: login button renamed to "Sign in now" ---');
+    await setLoginLabel('Sign in now');
+    const [healedRun] = await replay(run.id, 1);
+    assert(healedRun.status === 'PASSED', `healed replay passes (${healedRun.summary})`);
+    assert(
+      healedRun.steps.some((s) => s.healed),
+      'the click step is marked healed',
+    );
+    const heals = await getJson(`${SERVER}/api/projects/${PROJECT_ID}/heals?status=pending`);
+    const heal = heals.find(
+      (h) => h.sourceSessionId === run.id && h.newLocator.name === 'Sign in now',
+    );
+    assert(
+      heal && heal.method === 'fuzzy' && heal.oldLocator.name === 'Sign In',
+      'heal queued for review',
+    );
+    const decided = await fetch(`${SERVER}/api/heals/${heal.id}/decision`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'approved' }),
+    });
+    assert(decided.ok, 'heal approved');
+    const reExported = await (
+      await fetch(`${SERVER}/api/sessions/${run.id}/export/spec?format=json`)
+    ).json();
+    assert(reExported.code.includes('"Sign in now"'), 'export uses the approved heal');
+    const healedCheck = runExportedSpec('smoke-login-healed', reExported.code);
+    if (!healedCheck.passed) console.log(healedCheck.output);
+    assert(healedCheck.passed, 'the healed export passes against the changed UI');
+    console.log('Approved heal exported; the updated test passes in plain Playwright.');
+
+    // With the heal approved, later replays use the new locator directly.
+    const [afterApproval] = await replay(run.id, 1);
+    assert(
+      afterApproval.status === 'PASSED' && !afterApproval.steps.some((s) => s.healed),
+      'replay after approval needs no heal',
+    );
+    await setLoginLabel('');
   }
 
   console.log('\nSmoke test passed.');

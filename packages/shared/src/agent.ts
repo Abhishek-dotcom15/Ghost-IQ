@@ -158,6 +158,8 @@ export const END_REASONS = [
   'cancelled',
   'runner_error',
   'runner_disconnected',
+  // Replay: the app no longer behaves like the recording (URL, element or end state differ).
+  'replay_diverged',
 ] as const;
 export const EndReason = z.enum(END_REASONS);
 export type EndReason = z.infer<typeof EndReason>;
@@ -183,6 +185,9 @@ export const ISSUE_KINDS = [
   'redirect_loop',
   'layout_overflow',
   'web_vital',
+  // Replay (Phase 5)
+  'locator_healed',
+  'replay_diverged',
 ] as const;
 export type IssueKind = (typeof ISSUE_KINDS)[number];
 

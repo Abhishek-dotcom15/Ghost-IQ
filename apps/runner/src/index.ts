@@ -10,7 +10,7 @@ const program = new Command();
 program
   .name('ghostiq-agent')
   .description('GhostIQ runner agent: drives a local browser for the GhostIQ control plane')
-  .version('0.4.0')
+  .version('0.7.0')
   .requiredOption(
     '-k, --key <key>',
     'Project ID to register against',

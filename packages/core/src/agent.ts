@@ -19,6 +19,7 @@ import {
   type BehaviorType,
   type ElementLocator,
   type EndReason,
+  type HealInfo,
   type HistoryItem,
   type SnapshotElement,
   type StepCompletedEvent,
@@ -26,7 +27,7 @@ import {
   type StepKind,
   type StepStatus,
 } from '@ghostiq/shared';
-import type { AgentOptions, Observation, RunOutcome } from './types.js';
+import type { AgentOptions, Observation, PlanResult, RunOutcome } from './types.js';
 
 const DEFAULTS = {
   memorySize: 6,
@@ -70,7 +71,10 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
   const brief = personaBrief(persona);
   const memorySize = options.memorySize ?? DEFAULTS.memorySize;
   const snapshotLimit = options.snapshotCharLimit ?? DEFAULTS.snapshotCharLimit;
-  const loopThreshold = options.loopThreshold ?? DEFAULTS.loopThreshold;
+  // A replay is bounded by its script; repeated states there are the recording's, not a loop.
+  const loopThreshold = command.replay
+    ? Number.POSITIVE_INFINITY
+    : (options.loopThreshold ?? DEFAULTS.loopThreshold);
   const maxFailures = options.maxConsecutiveFailures ?? DEFAULTS.maxConsecutiveFailures;
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? abortableSleep;
@@ -107,6 +111,7 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
     run: () => Promise<{
       behavior?: BehaviorType;
       input?: StepCompletedEvent['input'];
+      heal?: HealInfo;
       status: StepStatus;
       error?: string;
       action?: AgentAction;
@@ -122,6 +127,15 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
     const result = await run();
     const signals = await driver.collect();
     const issues = [...(result.extraIssues ?? []), ...signals.issues];
+    if (result.heal && result.element) {
+      const { from, method, confidence } = result.heal;
+      issues.unshift({
+        kind: 'locator_healed',
+        message: `${from.role} "${from.name}" is now ${result.element.role} "${result.element.name}" (healed by ${method}, confidence ${confidence.toFixed(2)})`,
+        rule: `${from.role}:${from.name}`.slice(0, 100),
+        url: driver.url(),
+      });
+    }
     issueCount += issues.length;
     const locator: ElementLocator | undefined = result.element && {
       ref: result.element.ref,
@@ -142,6 +156,7 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
       agentAction: result.action && maskAction(result.action, result.element),
       behavior: result.behavior,
       input: result.input,
+      heal: result.heal,
       locator,
       url,
       durationMs: now() - started,
@@ -230,8 +245,9 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
       }
 
       let action: AgentAction;
+      let plan: PlanResult;
       try {
-        const plan = await planner.next(
+        plan = await planner.next(
           {
             sessionId: command.sessionId,
             goal: command.goal,
@@ -244,6 +260,7 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
             allowDestructive,
           },
           signal,
+          observation,
         );
         tokens += plan.tokens;
         action = plan.action;
@@ -252,19 +269,38 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
         return finish('FAILED', 'planner_error', `The planner failed: ${errorMessage(err)}`);
       }
 
+      if (plan.check) {
+        const check = plan.check;
+        await record('ASSERT', check.description, async () => ({
+          status: check.passed ? 'PASSED' : 'FAILED',
+          error: check.error,
+          extraIssues: check.issue ? [check.issue] : undefined,
+        }));
+      }
+
       if (action.type === 'finish') {
-        return action.goalMet
-          ? finish('PASSED', 'goal_met', action.summary)
-          : finish('FAILED', 'goal_not_met', action.summary);
+        if (!action.goalMet)
+          return finish('FAILED', plan.endReason ?? 'goal_not_met', action.summary);
+        // Record what "done" looked like, so exported tests can assert the goal state.
+        const headings = [...observation.elements.values()]
+          .filter((e) => e.role === 'heading' && e.name)
+          .map((e) => e.name)
+          .slice(0, 5);
+        return {
+          ...finish('PASSED', 'goal_met', action.summary),
+          finalState: { url: observation.url, headings },
+        };
       }
       decisions++;
 
       const ref = actionRef(action);
       const element = ref ? observation.elements.get(ref) : undefined;
-      let inputInfo: StepCompletedEvent['input'];
+      let inputInfo: StepCompletedEvent['input'] = plan.input;
       // Form values come from the persona's seeded generator (reproducible), unless the
       // persona types valid data and the planner supplied an exact value from the goal.
+      // Replays type exactly what the recording typed.
       if (
+        !command.replay &&
         action.type === 'fill' &&
         element &&
         (persona.input_strategy !== 'valid' || action.text === GENERATE_TOKEN)
@@ -281,6 +317,7 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
             : action.text
           : undefined;
       const planned = action;
+      const heal = plan.heal;
 
       const step = await record(KIND[planned.type], description, async () => {
         const base = {
@@ -288,6 +325,7 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
           element,
           value,
           input: inputInfo,
+          heal,
           observationHash: stateHash,
         };
         if (persona.allowed_actions && !persona.allowed_actions.includes(planned.type)) {

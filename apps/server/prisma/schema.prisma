@@ -30,8 +30,13 @@ model TestSession {
   /// Persona display name (kept for history even if the persona is later deleted).
   persona        String
   personaId      String?
+  /// PersonaSpec JSON as used by this run (personas can change later; replay/export need this).
+  personaJson    String?
   /// Seed for generated inputs, pacing and behaviors: same persona + seed = same choices.
   seed           Int?
+  /// explore = planner-driven run; replay = deterministic re-run of `replayOfId`'s action log.
+  mode           String              @default("explore")
+  replayOfId     String?
   status         String // PENDING, RUNNING, PASSED, FAILED, CANCELLED
   goal           String?
   /// RunConfig JSON: budgets, allowed origins, destructive-action permission.
@@ -39,6 +44,8 @@ model TestSession {
   /// Why the run ended: goal_met, goal_not_met, budget_steps, loop_detected, cancelled, ...
   endReason      String?
   summary        String?
+  /// FinalState JSON when the goal was met: URL and headings (exported tests assert these).
+  finalStateJson String?
   /// Playwright trace (open with `npx playwright show-trace <file>`).
   traceUrl       String?
   isBaseline     Boolean             @default(false)
@@ -50,6 +57,33 @@ model TestSession {
   occurrences    FindingOccurrence[]
 
   @@index([projectId, startedAt])
+  @@index([replayOfId])
+}
+
+/// A locator repaired during replay. Pending heals are not trusted: only approved ones are
+/// written into exported specs. Rejected ones count towards the false-heal rate.
+model HealEvent {
+  id               String    @id @default(uuid())
+  projectId        String
+  /// The replay run where the heal happened.
+  sessionId        String
+  /// The recorded run being replayed (whose locator was healed).
+  sourceSessionId  String
+  stepNumber       Int
+  /// ElementLocator JSON before and after.
+  oldLocatorJson   String
+  newLocatorJson   String
+  method           String // fuzzy, llm
+  confidence       Float
+  reason           String
+  status           String    @default("pending") // pending, approved, rejected
+  beforeScreenshot String?
+  afterScreenshot  String?
+  createdAt        DateTime  @default(now())
+  decidedAt        DateTime?
+
+  @@index([projectId, status])
+  @@index([sourceSessionId])
 }
 
 /// A deduplicated defect. Raw step issues from many steps, runs and personas fold into one
@@ -179,6 +213,8 @@ model TestStep {
   inputJson       String?
   /// Persona behavior that injected this step (double_click, refresh_mid_flow, ...), if any.
   behavior        String?
+  /// Replay: the target was found by the heal ladder rather than its recorded locator.
+  healed          Boolean          @default(false)
   timestamp       DateTime         @default(now())
   networkLogs     NetworkRequest[]
 

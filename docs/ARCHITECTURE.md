@@ -99,9 +99,54 @@ stored as a durable locator (`page.getByRole(role, { name })`) for replay and ex
 
 `apps/server/src/findings`: `classify.ts` maps each raw issue to a finding type, route template and severity (pure, unit-tested); `engine.ts` fingerprints it (type + route + rule or normalized message), upserts the project's Finding (recurrence count, personas, latest evidence, repro steps of the first occurrence) and records an occurrence per run. Dismissed findings stay dismissed when they recur; fixed findings reopen as regressions. When a run finishes, run-level oracles execute: slow endpoints (skipped for throttled personas) and accepted invalid input (heuristic, marked _suspected_). Visual regression compares page-arrival screenshots with the baseline run's, keyed by exact path and screenshot size. `reports.ts` renders HTML, JSON, JUnit and SARIF.
 
+## Replay, healing and export (Phase 5)
+
+"Explore once, replay forever." A run that met its goal records everything a replay needs: the
+persona spec and seed used, every action with its durable role+name locator, generated-value
+provenance, and the end state (`finalStateJson`: URL and up to five headings).
+
+```mermaid
+flowchart LR
+  REC[Recorded run<br/>goal_met] -->|buildReplayScript| SCRIPT[ReplayScript<br/>actions, locators, values,<br/>start URLs, end state]
+  SCRIPT -->|run:start replay| RP[ReplayPlanner<br/>no planner model]
+  RP --> LADDER{element found?}
+  LADDER -->|exact role+name| ACT[act]
+  LADDER -->|same role, similar name ≥0.75| HEAL[heal: fuzzy]
+  LADDER -->|model ≥0.85, compatible role| HEALL[heal: llm]
+  LADDER -->|no| DIV[replay_diverged<br/>flow_regression finding]
+  HEAL --> ACT
+  HEALL --> ACT
+  HEAL & HEALL --> Q[HealEvent<br/>pending review]
+  Q -->|approved| REC
+  REC -->|exportPlaywrightSpec| SPEC[.spec.ts<br/>plain Playwright]
+```
+
+- **Replay** (`packages/core/src/replay.ts`) is a `Planner` that reads the script instead of
+  calling a model. It types the recorded values (masked secrets are regenerated from the seed;
+  secrets typed verbatim make a run non-replayable), skips behavior steps (the seeded behaviors
+  re-inject them), and turns loop detection off (the script bounds the run).
+- **Never healed:** the page each step starts on (compared by origin + route template) and the
+  end state. A difference is recorded as an `ASSERT` step that failed with a `replay_diverged`
+  issue, which becomes a high-severity `flow_regression` finding.
+- **Heal ladder:** exact match → same role with a similar name (best of edit ratio, word
+  overlap and containment ≥ 0.75; ties are left to the model) → the model via
+  `POST /api/ai/heal-locator`, accepted only at ≥ 0.85 confidence with a compatible role
+  (button↔link, textbox↔searchbox, ...). Every heal adds a `ui_change` finding (info) and a
+  `HealEvent` with before/after screenshots. Only approved heals are used by export and later
+  replays; rejected ones give the false-heal rate.
+- **Flakiness** is measured only on replays (same actions, same values):
+  `100 × (1 − |2p − 1|)` over the last 20, where p is the pass rate. Replays of one run execute
+  one at a time.
+- **Export** (`apps/server/src/export/spec.ts`) writes a self-contained `@playwright/test`
+  file: `getByRole(role, { name, exact: true })`, URL assertions where the recording navigated,
+  and the end state (URL and headings). The smoke test runs the export in plain Playwright.
+- **Analytics** (`apps/server/src/analytics`) computes coverage (routes and transitions per
+  persona), persona effectiveness, new findings per day, cost per finding, endpoint p50/p95
+  and heal outcomes from stored runs.
+
 **End reasons:** `goal_met`, `goal_not_met`, `budget_steps`, `budget_time`, `budget_tokens`,
 `loop_detected`, `stuck`, `planner_error`, `start_failed`, `cancelled`, `runner_error`,
-`runner_disconnected`.
+`runner_disconnected`, `replay_diverged`.
 
 ## Configuration
 
@@ -115,8 +160,9 @@ Every provider call (initial, retry, repair or cache hit) is written to the `Llm
 ## Known limitations (tracked in `docs/PLAN.md`)
 
 - No authentication yet: anyone who can reach the server can drive a runner or call the planner (Phase 7).
-- Bugs are recorded per step but not yet deduplicated or ranked (Phase 4: Findings).
 - Login is via `--storage-state` only (no scripted login prelude yet).
-- With a real model the planner is not deterministic, so only inputs, pacing and behavior rolls are seed-reproducible; Phase 5 replay removes the model.
+- With a real model exploration is not deterministic; replays of a recorded run are.
+- Replay matches an element by role and name and takes the first match; repeated identical controls (two "Add to cart" buttons) are not told apart yet.
+- Pending replay batches live in server memory: a server restart leaves queued replays `PENDING`.
 - Events are broadcast to every dashboard (Phase 7: per-project rooms).
 - Without an LLM key, planning comes from the scripted demo responder (a mock provider), labelled `[demo]` everywhere. It exercises the same LLM pipeline as a real model.

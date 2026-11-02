@@ -201,12 +201,34 @@ export function issueToFinding(issue: StepIssue, pageUrl: string): RawFinding | 
             rule: 'cls',
             title: `Layout shifts while loading ${pageRoute}`,
           };
+    case 'locator_healed':
+      // Not necessarily a bug: a renamed control breaks every script that targeted it.
+      return {
+        ...base,
+        type: 'ui_change',
+        severity: 'info',
+        route: pageRoute,
+        rule: issue.rule,
+        confidence: 'suspected',
+        title: `Control changed on ${pageRoute}: ${firstLine(issue.message)}`,
+      };
+    case 'replay_diverged':
+      return {
+        ...base,
+        type: 'flow_regression',
+        severity: 'high',
+        route: pageRoute,
+        rule: issue.rule,
+        title: `Recorded flow no longer works on ${pageRoute}: ${firstLine(issue.message)}`,
+      };
     default:
       return null;
   }
 }
 
 const PAGE_SCOPED: ReadonlySet<StepIssue['kind']> = new Set([
+  'locator_healed',
+  'replay_diverged',
   'page_error',
   'console_error',
   'a11y',

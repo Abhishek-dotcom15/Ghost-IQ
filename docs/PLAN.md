@@ -1,6 +1,8 @@
 # GhostIQ — Build Plan (v2)
 
-Status: Phases 0-4 complete (v0.6.0). Next: Phase 5 (healing, replay, export, analytics). Last updated: 2026-11-02.
+Status: Phases 0-5 complete (v0.7.0). Next: Phase 6 (CLI, GitHub Action, distribution). Last updated: 2026-11-02.
+
+**Phase 5 result:** recorded runs replay with zero LLM calls and an end-state check; the heal ladder (exact → fuzzy same-role ≥0.75 → model ≥0.85 with compatible role) queues HealEvents for review; approved heals flow into exports and later replays; exports pass in plain Playwright (verified end to end in `scripts/smoke.mjs`, including a renamed login button); flakiness is computed from replays only; analytics API + dashboard. Deferred: the vision-LLM judge (again: it needs labelled data from triage to be measured honestly), stored alternate locators as the ladder's first rung, disambiguating repeated identical controls, and a persistent replay queue.
 
 **Phase 4 result:** seeded-bug benchmark (B1, demo mode, 8 personas) found 29/33 bugs (94% of detectable) at 90% precision; details in EVALUATION.md. Deferred from Phase 4: the vision-LLM judge (moved to Phase 5, after replay exists to verify its suspicions) and visual-diff masks for dynamic regions.
 

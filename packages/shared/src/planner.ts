@@ -38,3 +38,32 @@ export const NextActionResponse = z.object({
   demo: z.boolean(),
 });
 export type NextActionResponse = z.infer<typeof NextActionResponse>;
+
+/**
+ * Replay's last heal rung: the recorded element is gone and no same-role element has a
+ * similar name, so the model is asked which element (if any) now does the same job.
+ */
+export const HealLocatorRequest = z.object({
+  sessionId: z.string().min(1),
+  /** The element the recording used. */
+  target: z.object({ role: z.string().max(100), name: z.string().max(500) }),
+  /** What the recorded step did, e.g. 'Click button "Sign In" (submit the login form)'. */
+  description: z.string().max(2000),
+  url: z.string().max(2000),
+  snapshot: z.string().max(60_000),
+});
+export type HealLocatorRequest = z.infer<typeof HealLocatorRequest>;
+
+export const HealLocatorOutput = z.object({
+  /** Snapshot ref of the element that now does the same job, or null if none does. */
+  ref: z.string().max(20).nullable(),
+  confidence: z.number().min(0).max(1),
+  reason: z.string().max(500),
+});
+export type HealLocatorOutput = z.infer<typeof HealLocatorOutput>;
+
+export const HealLocatorResponse = HealLocatorOutput.extend({
+  usage: NextActionResponse.shape.usage,
+  demo: z.boolean(),
+});
+export type HealLocatorResponse = z.infer<typeof HealLocatorResponse>;

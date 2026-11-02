@@ -8,7 +8,11 @@ import {
   Settings,
   Plus,
   Terminal,
+  LineChart,
+  Wrench,
 } from 'lucide-react';
+import AnalyticsView from './components/AnalyticsView';
+import HealsView from './components/HealsView';
 import DashboardView from './components/DashboardView';
 import SessionsView from './components/SessionsView';
 import EndpointsView from './components/EndpointsView';
@@ -37,7 +41,14 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [currentView, setCurrentView] = useState<
-    'dashboard' | 'sessions' | 'findings' | 'endpoints' | 'personas' | 'settings'
+    | 'dashboard'
+    | 'sessions'
+    | 'findings'
+    | 'analytics'
+    | 'heals'
+    | 'endpoints'
+    | 'personas'
+    | 'settings'
   >('dashboard');
   const [newProjectName, setNewProjectName] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -234,6 +245,22 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => setCurrentView('analytics')}
+            className={`btn ${currentView === 'analytics' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ justifyContent: 'flex-start', width: '100%' }}
+          >
+            <LineChart size={18} /> Analytics
+          </button>
+
+          <button
+            onClick={() => setCurrentView('heals')}
+            className={`btn ${currentView === 'heals' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ justifyContent: 'flex-start', width: '100%' }}
+          >
+            <Wrench size={18} /> Heal Review
+          </button>
+
+          <button
             onClick={() => setCurrentView('endpoints')}
             className={`btn ${currentView === 'endpoints' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ justifyContent: 'flex-start', width: '100%' }}
@@ -308,6 +335,8 @@ export default function App() {
               {currentView === 'dashboard' && 'Project Summary'}
               {currentView === 'sessions' && 'Autonomous Test Suites'}
               {currentView === 'findings' && 'Findings'}
+              {currentView === 'analytics' && 'Analytics'}
+              {currentView === 'heals' && 'Heal Review'}
               {currentView === 'endpoints' && 'API Analytics'}
               {currentView === 'personas' && 'AI Personas'}
               {currentView === 'settings' && 'Platform Settings'}
@@ -379,6 +408,14 @@ export default function App() {
             {currentView === 'findings' && (
               <FindingsView project={selectedProject} socket={socket} />
             )}
+            {currentView === 'analytics' && (
+              <AnalyticsView
+                project={selectedProject}
+                socket={socket}
+                onReviewHeals={() => setCurrentView('heals')}
+              />
+            )}
+            {currentView === 'heals' && <HealsView project={selectedProject} socket={socket} />}
             {currentView === 'endpoints' && <EndpointsView project={selectedProject} />}
             {currentView === 'personas' && <PersonaBuilder project={selectedProject} />}
             {currentView === 'settings' && <LlmStatusPanel />}

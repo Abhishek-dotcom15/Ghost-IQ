@@ -1,16 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { computeFlakinessScore, updateRunningAverage } from './flakiness.js';
+import { updateRunningAverage } from './flakiness.js';
 
-describe('computeFlakinessScore', () => {
-  it('is 0 for no history or a stable history', () => {
-    expect(computeFlakinessScore([])).toBe(0);
-    expect(computeFlakinessScore(['PASSED', 'PASSED', 'PASSED'])).toBe(0);
-  });
-
-  it('counts transitions relative to run count', () => {
-    expect(computeFlakinessScore(['PASSED', 'FAILED', 'PASSED', 'PASSED'])).toBe(50);
-  });
-});
+// Flakiness itself is measured on replays: see replay/script.test.ts (replayFlakiness).
 
 describe('updateRunningAverage', () => {
   it('folds a new sample into the mean', () => {

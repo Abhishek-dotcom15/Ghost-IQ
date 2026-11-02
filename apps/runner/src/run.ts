@@ -1,12 +1,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runAgent, type RunOutcome } from '@ghostiq/core';
+import { ReplayPlanner, runAgent, type RunOutcome } from '@ghostiq/core';
 import { resolveDevice, resolveNetwork } from '@ghostiq/personas';
 import { SocketEvents, type RunTestCommand } from '@ghostiq/shared';
 import type { Socket } from 'socket.io-client';
 import { PlaywrightDriver } from './driver.js';
-import { HttpPlanner } from './planner.js';
+import { HttpPlanner, httpHealer } from './planner.js';
 
 export interface RunnerOptions {
   serverUrl: string;
@@ -23,7 +23,11 @@ export async function executeRun(
   signal: AbortSignal,
 ): Promise<RunOutcome> {
   const log = (msg: string) => console.log(`[${command.sessionId.slice(0, 8)}] ${msg}`);
-  log(`start: ${command.persona.name} -> ${command.targetUrl} | goal: ${command.goal}`);
+  log(
+    command.replay
+      ? `replay of ${command.replay.sourceSessionId.slice(0, 8)}: ${command.replay.steps.length} step(s) -> ${command.targetUrl}`
+      : `start: ${command.persona.name} -> ${command.targetUrl} | goal: ${command.goal}`,
+  );
 
   let driver: PlaywrightDriver | undefined;
   let outcome: RunOutcome;
@@ -44,7 +48,10 @@ export async function executeRun(
     outcome = await runAgent({
       command,
       driver,
-      planner: new HttpPlanner(options.serverUrl),
+      // Replays need no planner model; the heal ladder asks one only when an element is gone.
+      planner: command.replay
+        ? new ReplayPlanner(command.replay, httpHealer(options.serverUrl, command.sessionId))
+        : new HttpPlanner(options.serverUrl),
       signal,
       events: {
         stepStarted: (event) => {

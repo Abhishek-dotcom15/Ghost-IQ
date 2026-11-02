@@ -38,6 +38,8 @@ export const demoResponder: MockResponder = (request) => {
       }
       return demoLogin(snapshot, history);
     }
+    case 'heal-selector':
+      return demoHeal(String(meta.snapshot ?? ''), meta.target as { role: string; name: string });
     case 'diagnostics':
       return {
         summary:
@@ -52,6 +54,29 @@ export const demoResponder: MockResponder = (request) => {
       throw new Error(`Demo responder has no script for purpose "${request.purpose}"`);
   }
 };
+
+/**
+ * Demo heal (not AI): when exactly one named, non-destructive element has the recorded
+ * role, it is taken as the replacement. Anything ambiguous gets null.
+ */
+function demoHeal(snapshot: string, target: { role: string; name: string } | undefined) {
+  const candidates = [...parseAriaSnapshot(snapshot).values()].filter(
+    (e) => e.role === target?.role && e.name && !isDestructiveName(e.name),
+  );
+  if (candidates.length !== 1) {
+    return {
+      ref: null,
+      confidence: 0,
+      reason: `[demo] ${candidates.length} ${target?.role ?? 'element'} candidates; demo mode only heals unambiguous cases.`,
+    };
+  }
+  const [only] = candidates;
+  return {
+    ref: only!.ref,
+    confidence: 0.9,
+    reason: `[demo] "${only!.name}" is the only ${only!.role} on the page.`,
+  };
+}
 
 const EXPLORE_GOAL = /\b(explore|exploring|crawl|find|stress|check every|everything|whole app)\b/i;
 

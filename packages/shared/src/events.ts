@@ -22,6 +22,8 @@ export const STEP_KINDS = [
   'NAVIGATE',
   'WAIT',
   'OFFLINE',
+  // Replay: a check against the recording (URL, end state).
+  'ASSERT',
 ] as const;
 export const StepKind = z.enum(STEP_KINDS);
 export type StepKind = z.infer<typeof StepKind>;
@@ -40,6 +42,55 @@ export const NetworkRequestRecord = z.object({
 });
 export type NetworkRequestRecord = z.infer<typeof NetworkRequestRecord>;
 
+/** What the page looked like when the goal was met: exported tests and replays assert it. */
+export const FinalState = z.object({
+  url: z.string().max(2000),
+  headings: z.array(z.string().max(200)).max(5),
+});
+export type FinalState = z.infer<typeof FinalState>;
+
+const StepInput = z.object({
+  strategy: z.enum(INPUT_STRATEGIES),
+  kind: z.string().max(30),
+  field: z.string().max(200),
+});
+
+/** One recorded planner decision, as replayed: no LLM, values and locators are fixed. */
+export const ReplayStep = z.object({
+  /** Step number in the recorded run. */
+  sourceStep: z.number().int().positive(),
+  /** The recorded action with its real value (masked secrets already regenerated). */
+  action: AgentAction,
+  /** Recorded (or approved-heal) target; absent for actions without an element. */
+  locator: ElementLocator.optional(),
+  /** Generated-value provenance, carried over so the validation oracle still applies. */
+  input: StepInput.optional(),
+  /** Where the recording was when it took this step (checked, never healed). */
+  startUrl: z.string().max(2000).optional(),
+  /** Screenshot of the recorded step, shown next to the replay's in heal review. */
+  screenshot: z.string().max(500).optional(),
+});
+export type ReplayStep = z.infer<typeof ReplayStep>;
+
+export const ReplayScript = z.object({
+  sourceSessionId: z.string().min(1),
+  steps: z.array(ReplayStep).min(1).max(500),
+  finalState: FinalState,
+});
+export type ReplayScript = z.infer<typeof ReplayScript>;
+
+export const HEAL_METHODS = ['fuzzy', 'llm'] as const;
+
+/** A locator repaired during replay; the server turns it into a HealEvent for review. */
+export const HealInfo = z.object({
+  sourceStep: z.number().int().positive(),
+  method: z.enum(HEAL_METHODS),
+  confidence: z.number().min(0).max(1),
+  reason: z.string().max(1000),
+  from: ElementLocator,
+});
+export type HealInfo = z.infer<typeof HealInfo>;
+
 export const RunTestCommand = z.object({
   sessionId: z.string().min(1),
   targetUrl: z.url(),
@@ -48,6 +99,8 @@ export const RunTestCommand = z.object({
   seed: z.number().int().min(0),
   goal: z.string().min(1).max(2000),
   config: RunConfig,
+  /** Set for replay runs: the recorded actions to repeat instead of asking a planner. */
+  replay: ReplayScript.optional(),
 });
 export type RunTestCommand = z.infer<typeof RunTestCommand>;
 
@@ -76,14 +129,10 @@ export const StepCompletedEvent = StepStartedEvent.extend({
   /** Set when the step was injected by a persona behavior rather than chosen by the planner. */
   behavior: z.enum(BEHAVIOR_TYPES).optional(),
   /** For fills with a generated value: which strategy produced it (feeds the validation oracle). */
-  input: z
-    .object({
-      strategy: z.enum(INPUT_STRATEGIES),
-      kind: z.string().max(30),
-      field: z.string().max(200),
-    })
-    .optional(),
+  input: StepInput.optional(),
   locator: ElementLocator.optional(),
+  /** Replay: the recorded locator no longer matched and this one was found instead. */
+  heal: HealInfo.optional(),
   url: z.string().max(2000).optional(),
   durationMs: z.number().int().nonnegative().optional(),
   observationHash: z.string().max(64).optional(),
@@ -108,6 +157,7 @@ export const SessionCompletedEvent = z.object({
   endReason: EndReason,
   summary: z.string().max(2000),
   stats: RunStats,
+  finalState: FinalState.optional(),
 });
 export type SessionCompletedEvent = z.infer<typeof SessionCompletedEvent>;
 
