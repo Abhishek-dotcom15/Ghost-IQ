@@ -34,37 +34,39 @@ export default function DashboardView({ project, refresh }: DashboardViewProps) 
   const [triggering, setTriggering] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  const [githubRepo, setGithubRepo] = useState('Abhishek-dotcom15/ghostiq');
-  const [githubPr, setGithubPr] = useState('1');
-  const [prComment, setPrComment] = useState('');
-
-  const handleExportPr = async () => {
+  const [ciTab, setCiTab] = useState<'action' | 'cli'>('action');
+  const [copied, setCopied] = useState(false);
+  const ciSnippet =
+    ciTab === 'action'
+      ? `# .github/workflows/ghostiq.yml (start your app first)
+- uses: Abhishek-dotcom15/Ghost-IQ@v0.9.0
+  with:
+    target: ${targetUrl}
+    personas: ${personaId}
+    fail-on: high
+    llm-provider: gemini
+    llm-api-key: \${{ secrets.GEMINI_API_KEY }}`
+      : `ghostiq run -t ${targetUrl} -p ${personaId} --fail-on high
+# exit 0 pass · 1 findings · 2 config · 3 GhostIQ could not run`;
+  const copySnippet = async () => {
     try {
-      const res = await fetch(`/api/projects/${project.id}/export-pr`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          repo: githubRepo,
-          prNumber: githubPr,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setPrComment(data.comment);
-        alert('CI/CD PR comment exported successfully (Mock Output generated below).');
-      } else {
-        alert(data.error || 'Failed to export PR check');
-      }
-    } catch (e) {
-      console.error(e);
+      await navigator.clipboard.writeText(ciSnippet);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
     }
   };
 
   // Calculate high-level project telemetry
-  const totalRuns = project.sessions.length;
-  const successRuns = project.sessions.filter((s) => s.status === 'PASSED').length;
-  const failRuns = project.sessions.filter((s) => s.status === 'FAILED').length;
-  const passRate = totalRuns > 0 ? Math.round((successRuns / totalRuns) * 100) : 100;
+  // Totals over all runs (project.sessions holds only the most recent few).
+  const totalRuns = project.stats?.total ?? project.sessions.length;
+  const successRuns =
+    project.stats?.passed ?? project.sessions.filter((s) => s.status === 'PASSED').length;
+  const failRuns =
+    project.stats?.failed ?? project.sessions.filter((s) => s.status === 'FAILED').length;
+  const finished = successRuns + failRuns;
+  const passRate = finished > 0 ? Math.round((successRuns / finished) * 100) : 100;
 
   const handleLaunchTest = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -406,71 +408,45 @@ export default function DashboardView({ project, refresh }: DashboardViewProps) 
               gap: '0.5rem',
             }}
           >
-            🐙 Export CI/CD Pull Request Report
+            🐙 Run GhostIQ on every pull request
           </h3>
           <p style={{ fontSize: '0.8rem', color: 'hsl(var(--text-muted))', lineHeight: '1.4' }}>
-            Simulate posting a PR status comment. This compiles recent runs data and posts a check
-            summary directly to GitHub.
+            Add the GhostIQ GitHub Action to your repository: each pull request gets one GhostIQ
+            comment with the findings, plus HTML / JUnit / SARIF reports, and the check fails on
+            findings at or above the threshold. The same runs anywhere with the CLI. This uses the
+            target and persona selected above.
           </p>
-          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '0.75rem' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              <label style={{ fontSize: '0.75rem', color: 'hsl(var(--text-muted))' }}>
-                Repository Path
-              </label>
-              <input
-                type="text"
-                placeholder="owner/repo"
-                value={githubRepo}
-                onChange={(e) => setGithubRepo(e.target.value)}
-                style={{ padding: '0.4rem', fontSize: '0.85rem' }}
-              />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              <label style={{ fontSize: '0.75rem', color: 'hsl(var(--text-muted))' }}>
-                Pull Request #
-              </label>
-              <input
-                type="number"
-                placeholder="PR #"
-                value={githubPr}
-                onChange={(e) => setGithubPr(e.target.value)}
-                style={{ padding: '0.4rem', fontSize: '0.85rem' }}
-              />
-            </div>
-          </div>
-          <button
-            onClick={handleExportPr}
-            className="btn btn-secondary"
-            style={{ alignSelf: 'flex-start', fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
-            disabled={project.sessions.length === 0}
-          >
-            Post PR Comment
-          </button>
-
-          {prComment && (
-            <div
-              style={{
-                marginTop: '0.5rem',
-                borderTop: '1px dashed var(--border-glass)',
-                paddingTop: '0.75rem',
-              }}
-            >
-              <span style={{ fontSize: '0.75rem', color: 'hsl(var(--success))', fontWeight: 600 }}>
-                🟢 Mock GitHub Comment Posted:
-              </span>
-              <pre
-                className="code-block"
-                style={{
-                  fontSize: '0.75rem',
-                  marginTop: '0.4rem',
-                  whiteSpace: 'pre-wrap',
-                  fontFamily: 'var(--font-mono)',
-                }}
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            {(['action', 'cli'] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setCiTab(t)}
+                className={`btn ${ciTab === t ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ fontSize: '0.75rem', padding: '0.3rem 0.7rem' }}
+                aria-pressed={ciTab === t}
               >
-                {prComment}
-              </pre>
-            </div>
-          )}
+                {t === 'action' ? 'GitHub Action' : 'Command line'}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => void copySnippet()}
+              className="btn btn-secondary"
+              style={{ fontSize: '0.75rem', padding: '0.3rem 0.7rem', marginLeft: 'auto' }}
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <pre
+            className="code-block"
+            style={{ fontSize: '0.75rem', whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)' }}
+          >
+            {ciSnippet}
+          </pre>
+          <p style={{ fontSize: '0.75rem', color: 'hsl(var(--text-muted))' }}>
+            Setup guide: docs/CI.md in the repository.
+          </p>
         </section>
       </div>
 

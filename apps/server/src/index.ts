@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { createApp } from './app.js';
+import { closeOrphanedRuns, createApp } from './app.js';
 import { AuditLog } from './auth/audit.js';
 import { applyRetention, scheduleRetention } from './retention.js';
 import { createPrismaClient } from './db.js';
@@ -13,6 +13,11 @@ const prisma = createPrismaClient(env.DATABASE_URL);
 const llm = createLlmRuntime(env, prisma);
 const ai = new AiService(llm.client);
 const personas = new PersonaRegistry(prisma, env.GHOSTIQ_PERSONAS_DIR);
+// Before accepting connections: runs a previous process was executing can never finish.
+const orphaned = await closeOrphanedRuns(prisma);
+if (orphaned)
+  console.log(`Closed ${orphaned} run(s) left in progress by a previous server process.`);
+
 const { server, io } = createApp({ env, prisma, ai, llm, personas });
 
 if (env.GHOSTIQ_RETENTION_DAYS) {

@@ -34,6 +34,8 @@ export interface Project {
   agentOnline: boolean;
   /** Read-only for anonymous visitors (public demo project). */
   public?: boolean;
+  /** Run totals by status, over all runs. */
+  stats?: { total: number; passed: number; failed: number; running: number };
   sessions: any[];
   _count?: {
     sessions: number;

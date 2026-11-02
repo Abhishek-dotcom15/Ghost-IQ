@@ -1525,7 +1525,7 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                     paddingTop: '0.5rem',
                   }}
                 >
-                  🔍 Showcases exact UI state processed by the LLM on the local environment machine.
+                  🔍 What the browser showed at the end of the selected step.
                 </div>
               </div>
             </div>

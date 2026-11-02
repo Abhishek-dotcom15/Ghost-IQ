@@ -458,7 +458,25 @@ export function createApp({
         _count: { select: { sessions: true, endpoints: true } },
       },
     });
-    res.json(projects.map((p) => ({ ...p, agentOnline: connectedAgents.has(p.id) })));
+    // Run totals per status (the embedded `sessions` are only the 5 most recent).
+    const byStatus = await prisma.testSession.groupBy({
+      by: ['projectId', 'status'],
+      where: { projectId: { in: projects.map((p) => p.id) } },
+      _count: { _all: true },
+    });
+    const stats = (projectId: string) => {
+      const rows = byStatus.filter((r) => r.projectId === projectId);
+      const count = (status: string) => rows.find((r) => r.status === status)?._count._all ?? 0;
+      return {
+        total: rows.reduce((sum, r) => sum + r._count._all, 0),
+        passed: count('PASSED'),
+        failed: count('FAILED'),
+        running: count('RUNNING') + count('PENDING'),
+      };
+    };
+    res.json(
+      projects.map((p) => ({ ...p, stats: stats(p.id), agentOnline: connectedAgents.has(p.id) })),
+    );
   });
 
   app.post('/api/projects', async (req, res) => {
@@ -941,6 +959,27 @@ function isPayloadTooLarge(err: unknown): boolean {
     err !== null &&
     (err as { type?: string }).type === 'entity.too.large'
   );
+}
+
+/**
+ * Runs in progress live in server memory (which runner executes them). After a restart
+ * nothing can finish them, so they are closed instead of showing "running" forever.
+ * Call once, at startup, before any run is dispatched.
+ */
+export async function closeOrphanedRuns(
+  prisma: PrismaClient,
+  startedBefore = new Date(),
+): Promise<number> {
+  const { count } = await prisma.testSession.updateMany({
+    where: { status: { in: ['RUNNING', 'PENDING'] }, startedAt: { lt: startedBefore } },
+    data: {
+      status: 'FAILED',
+      endReason: 'runner_disconnected',
+      summary: 'The GhostIQ server restarted while this run was in progress.',
+      endedAt: new Date(),
+    },
+  });
+  return count;
 }
 
 /** 4xx status carried by a middleware error (body-parser, serve-static), if any. */

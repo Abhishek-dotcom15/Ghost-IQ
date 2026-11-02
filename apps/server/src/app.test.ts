@@ -6,7 +6,7 @@ import { SocketEvents, type RunTestCommand } from '@ghostiq/shared';
 import { io as connect, type Socket } from 'socket.io-client';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { buildRunConfig, createApp } from './app.js';
+import { buildRunConfig, closeOrphanedRuns, createApp } from './app.js';
 import { createPrismaClient, type PrismaClient } from './db.js';
 import { loadEnv } from './env.js';
 import { createLlmRuntime } from './llm.js';
@@ -157,6 +157,25 @@ describe('GhostIQ API', () => {
   it('returns JSON 404 for unknown API routes and sessions', async () => {
     expect((await request(app).get('/api/nope')).status).toBe(404);
     expect((await request(app).get('/api/sessions/missing')).status).toBe(404);
+  });
+
+  it('closes runs left "running" by a previous server process', async () => {
+    const project = await prisma.project.create({ data: { name: 'Orphans' } });
+    const stuck = await prisma.testSession.create({
+      data: {
+        projectId: project.id,
+        name: 'stuck',
+        targetUrl: 'http://a.test',
+        persona: 'P',
+        status: 'RUNNING',
+        startedAt: new Date(Date.now() - 60_000),
+      },
+    });
+    expect(await closeOrphanedRuns(prisma)).toBeGreaterThanOrEqual(1);
+    expect(await prisma.testSession.findUnique({ where: { id: stuck.id } })).toMatchObject({
+      status: 'FAILED',
+      endReason: 'runner_disconnected',
+    });
   });
 
   it('answers client mistakes with 4xx, not 500', async () => {
