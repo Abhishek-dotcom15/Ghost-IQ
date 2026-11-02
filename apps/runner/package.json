@@ -17,6 +17,7 @@
     "browsers:install": "playwright install chromium"
   },
   "dependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@ghostiq/core": "workspace:*",
     "@ghostiq/personas": "workspace:*",
     "@ghostiq/shared": "workspace:*",

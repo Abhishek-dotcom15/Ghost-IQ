@@ -9,11 +9,34 @@
 different user personas through your web app (localhost, staging or production), watches
 network traffic, console errors and accessibility, and reports what broke with evidence.
 
-> **Status: v0.5 — personas as data.** Phases 0–3 of [the build plan](docs/PLAN.md) are done: a
-> tested monorepo, a provider-agnostic LLM layer, an agent core with guardrails and budgets, and
-> eight personas defined as YAML (seeded inputs, behaviors, devices, network profiles) that you can
-> extend without code. Next: the findings engine (Phase 4) and Playwright export (Phase 5).
-> Nothing below claims more than the code does today.
+> **Status: v0.6 — findings engine.** Phases 0–4 of [the build plan](docs/PLAN.md) are done: an
+> agent core with guardrails, eight personas as YAML, and 15 oracles that turn what the agent sees
+> into deduplicated, severity-ranked findings with evidence and repro steps. On the bundled
+> seeded-bug benchmark, all eight personas together find **29 of 33 bugs (94% of the detectable
+> ones) at 90% precision** — measured in demo mode, see [docs/EVALUATION.md](docs/EVALUATION.md)
+> for what that does and does not mean. Next: replay and Playwright export (Phase 5).
+
+## Findings
+
+Raw signals from every step become **Findings**: one per defect, merged across steps, runs and
+personas, ranked by severity, each with evidence (screenshot, request, console output, detail),
+the steps that led to it, and which personas hit it. Triage them as confirmed, dismissed (it stays
+dismissed if seen again) or fixed (it reopens automatically if it comes back).
+
+| Oracle           | Finds                                                                                                                                         |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime          | Uncaught exceptions, console errors                                                                                                           |
+| Network          | 5xx, failed requests, hanging requests, slow endpoints (average above 800 ms)                                                                 |
+| Navigation       | Broken links (404), redirect loops                                                                                                            |
+| Idempotency      | The same state-changing request succeeding twice (double submits)                                                                             |
+| Validation       | Invalid generated input accepted with a 2xx (flagged _suspected_)                                                                             |
+| Accessibility    | axe-core with WCAG 2.0-2.2 A/AA rules, run whenever the page content changes                                                                  |
+| Security hygiene | Missing CSP / nosniff / frame protection / HSTS, cookie flags, X-Powered-By, stack traces and secrets in responses, injected script executing |
+| Layout & vitals  | Horizontal overflow on responsive pages, layout shift (CLS), slow LCP                                                                         |
+| Visual           | Pixel diff of page loads against a baseline run                                                                                               |
+
+Reports for a run or a whole project: **HTML**, **JSON**, **JUnit XML** (CI test tabs) and
+**SARIF 2.1.0** (GitHub code scanning).
 
 ## Personas
 
@@ -111,9 +134,10 @@ packages/
   core/        agent loop, guardrails and budgets (browser-independent, fully unit-tested)
   personas/    persona YAML loader, 8 built-in personas, seeded input generators, device/network profiles
 examples/
-  mock-target-app/   demo app with seeded bugs
+  mock-target-app/   demo shop with 33 labelled bugs (bugs.json)
 scripts/smoke.mjs    end-to-end smoke test
-docs/                PLAN.md, ARCHITECTURE.md, PERSONAS.md
+docs/                PLAN.md, ARCHITECTURE.md, PERSONAS.md, EVALUATION.md
+scripts/bench-bugs.mjs  seeded-bug benchmark (recall / precision against bugs.json)
 ```
 
 ## Development commands

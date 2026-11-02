@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Account - Ghost Shop</title>
+    <link rel="stylesheet" href="/shop.css" />
+  </head>
+  <body>
+    <header>
+      <a href="/">Home</a>
+      <a href="/orders">My orders</a>
+    </header>
+    <main>
+      <div class="card">
+        <!-- BUG-IDOR-ACCOUNT: shows any account's details based only on the URL. -->
+        <h1>Account</h1>
+        <p id="who"></p>
+      </div>
+    </main>
+    <script>
+      const id = Number(location.pathname.split('/').pop());
+      const people = {
+        1: 'Ava Chen, ava@example.test, 12 Ghost Lane',
+        2: 'Liam Okafor, liam@example.test, 9 Spectre Rd',
+      };
+      document.getElementById('who').textContent = people[id] || 'Unknown account';
+    </script>
+  </body>
+</html>

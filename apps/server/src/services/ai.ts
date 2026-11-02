@@ -126,6 +126,9 @@ Choose step ${request.stepNumber}.`;
         snapshot: request.snapshot,
         history: request.history,
         persona: request.persona,
+        goal: request.goal,
+        url: request.url,
+        allowDestructive: request.allowDestructive,
       },
     });
 

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Product - Ghost Shop</title>
+    <link rel="stylesheet" href="/shop.css" />
+  </head>
+  <body>
+    <header>
+      <a href="/">Home</a>
+      <a href="/products">Products</a>
+      <a href="/cart">Cart</a>
+    </header>
+    <main>
+      <div class="card">
+        <h1 id="name">Loading…</h1>
+        <p id="price"></p>
+        <button id="add">Add to cart</button>
+        <p id="status" class="status"></p>
+        <p><a href="/cart">Go to cart</a></p>
+      </div>
+    </main>
+    <footer>Ghost Shop · <a href="/help" style="color: #3d444d">Help</a></footer>
+    <script>
+      const id = location.pathname.split('/').pop();
+      fetch('/api/products/' + id)
+        .then((r) => r.json().then((body) => ({ ok: r.ok, body })))
+        .then(({ ok, body }) => {
+          if (!ok) {
+            document.getElementById('name').textContent = 'Something went wrong';
+            document.getElementById('status').textContent = body.error;
+            return;
+          }
+          document.getElementById('name').textContent = body.name;
+          document.getElementById('price').textContent = '$' + body.price;
+        });
+      document.getElementById('add').addEventListener('click', async () => {
+        // BUG-DOUBLE-CART: the button is never disabled while the request is in flight.
+        const res = await fetch('/api/cart', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ productId: Number(id) }),
+        });
+        const data = await res.json();
+        document.getElementById('status').textContent =
+          'Cart now has ' + data.items.length + ' item(s)';
+      });
+    </script>
+  </body>
+</html>

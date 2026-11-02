@@ -21,6 +21,7 @@ import {
   type EndReason,
   type HistoryItem,
   type SnapshotElement,
+  type StepCompletedEvent,
   type StepIssue,
   type StepKind,
   type StepStatus,
@@ -82,6 +83,7 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
   let tokens = 0;
   let issueCount = 0;
   let consecutiveFailures = 0;
+  let lastActionType: AgentAction['type'] | undefined;
 
   const finish = (
     status: RunOutcome['status'],
@@ -104,6 +106,7 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
     description: string,
     run: () => Promise<{
       behavior?: BehaviorType;
+      input?: StepCompletedEvent['input'];
       status: StepStatus;
       error?: string;
       action?: AgentAction;
@@ -138,6 +141,7 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
       value: result.value,
       agentAction: result.action && maskAction(result.action, result.element),
       behavior: result.behavior,
+      input: result.input,
       locator,
       url,
       durationMs: now() - started,
@@ -212,8 +216,10 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
       const observation = await driver.observe();
       const stateHash = hashState(observation);
       // A failed action leaves the page unchanged; repeated failures are the "stuck" check's
-      // job, so only states reached after a successful (or skipped) step count towards a loop.
-      const seen = (stateSeen.get(stateHash) ?? 0) + (consecutiveFailures > 0 ? 0 : 1);
+      // job. Waiting on a loading page is expected to show the same state (that is how hangs
+      // surface); budgets bound it. Only other successful steps count towards a loop.
+      const countsTowardLoop = consecutiveFailures === 0 && lastActionType !== 'wait';
+      const seen = (stateSeen.get(stateHash) ?? 0) + (countsTowardLoop ? 1 : 0);
       stateSeen.set(stateHash, seen);
       if (seen >= loopThreshold) {
         return finish(
@@ -255,6 +261,7 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
 
       const ref = actionRef(action);
       const element = ref ? observation.elements.get(ref) : undefined;
+      let inputInfo: StepCompletedEvent['input'];
       // Form values come from the persona's seeded generator (reproducible), unless the
       // persona types valid data and the planner supplied an exact value from the goal.
       if (
@@ -262,7 +269,9 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
         element &&
         (persona.input_strategy !== 'valid' || action.text === GENERATE_TOKEN)
       ) {
-        action = { ...action, text: inputs.value(element, persona.input_strategy).value };
+        const generated = inputs.value(element, persona.input_strategy);
+        action = { ...action, text: generated.value };
+        inputInfo = { strategy: generated.strategy, kind: generated.kind, field: element.name };
       }
       const description = describe(action, element);
       const value =
@@ -274,7 +283,13 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
       const planned = action;
 
       const step = await record(KIND[planned.type], description, async () => {
-        const base = { action: planned, element, value, observationHash: stateHash };
+        const base = {
+          action: planned,
+          element,
+          value,
+          input: inputInfo,
+          observationHash: stateHash,
+        };
         if (persona.allowed_actions && !persona.allowed_actions.includes(planned.type)) {
           return {
             ...base,
@@ -367,6 +382,7 @@ export async function runAgent(options: AgentOptions): Promise<RunOutcome> {
       }
 
       consecutiveFailures = step.status === 'FAILED' ? consecutiveFailures + 1 : 0;
+      lastActionType = planned.type;
       if (consecutiveFailures >= maxFailures) {
         return finish(
           'FAILED',

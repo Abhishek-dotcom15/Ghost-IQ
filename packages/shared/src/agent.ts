@@ -171,7 +171,28 @@ export const ISSUE_KINDS = [
   'destructive_blocked',
   'unknown_ref',
   'action_not_allowed',
+  // Oracles (Phase 4): each becomes a Finding on the server.
+  'a11y',
+  'security_header',
+  'insecure_cookie',
+  'info_exposure',
+  'script_injection',
+  'duplicate_submission',
+  'hanging_request',
+  'broken_link',
+  'redirect_loop',
+  'layout_overflow',
+  'web_vital',
 ] as const;
+export type IssueKind = (typeof ISSUE_KINDS)[number];
+
+/** Issues that describe what the agent did rather than a defect in the app. */
+export const AGENT_NOTE_KINDS: ReadonlySet<IssueKind> = new Set([
+  'blocked_navigation',
+  'destructive_blocked',
+  'unknown_ref',
+  'action_not_allowed',
+]);
 
 /** Something noteworthy observed during a step. Recorded, never fatal to the run. */
 export const StepIssue = z.object({
@@ -179,6 +200,12 @@ export const StepIssue = z.object({
   message: z.string().max(2000),
   url: z.string().max(2000).optional(),
   status: z.number().int().optional(),
+  method: z.string().max(16).optional(),
+  /** Oracle-specific rule: axe rule id, header name, "stack-trace", "cls", ... */
+  rule: z.string().max(100).optional(),
+  impact: z.enum(['minor', 'moderate', 'serious', 'critical']).optional(),
+  /** Supporting detail: HTML snippet, response excerpt, measured value. */
+  detail: z.string().max(2000).optional(),
 });
 export type StepIssue = z.infer<typeof StepIssue>;
 

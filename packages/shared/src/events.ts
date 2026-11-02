@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AgentAction, ElementLocator, EndReason, RunConfig, StepIssue } from './agent.js';
-import { BEHAVIOR_TYPES, PersonaSpec } from './persona.js';
+import { BEHAVIOR_TYPES, INPUT_STRATEGIES, PersonaSpec } from './persona.js';
 
 /**
  * Socket.IO contract between the runner agent and the control plane.
@@ -75,6 +75,14 @@ export const StepCompletedEvent = StepStartedEvent.extend({
   agentAction: AgentAction.optional(),
   /** Set when the step was injected by a persona behavior rather than chosen by the planner. */
   behavior: z.enum(BEHAVIOR_TYPES).optional(),
+  /** For fills with a generated value: which strategy produced it (feeds the validation oracle). */
+  input: z
+    .object({
+      strategy: z.enum(INPUT_STRATEGIES),
+      kind: z.string().max(30),
+      field: z.string().max(200),
+    })
+    .optional(),
   locator: ElementLocator.optional(),
   url: z.string().max(2000).optional(),
   durationMs: z.number().int().nonnegative().optional(),

@@ -1,0 +1,253 @@
+{
+  "$comment": "Planted bugs in the GhostIQ demo shop. `match` says which finding counts as detecting the bug: same finding type, plus route and/or rule when given. `consequences` lists findings the same bug causes (they are not false positives, but do not count as detection). `detectable: false` marks bugs no current oracle can see (kept to keep recall honest). `requires` lists setup the benchmark must do first.",
+  "app": "ghost-shop",
+  "version": 1,
+  "bugs": [
+    {
+      "id": "BUG-A11Y-IMG-ALT",
+      "category": "accessibility",
+      "title": "Avatar image has no alt text",
+      "page": "/",
+      "match": { "type": "accessibility", "rule": "image-alt" }
+    },
+    {
+      "id": "BUG-A11Y-INPUT-LABEL",
+      "category": "accessibility",
+      "title": "Quick-search input has no label",
+      "page": "/",
+      "match": { "type": "accessibility", "rule": "label" }
+    },
+    {
+      "id": "BUG-A11Y-BUTTON-NAME",
+      "category": "accessibility",
+      "title": "Icon-only button has no accessible name",
+      "page": "/",
+      "match": { "type": "accessibility", "rule": "button-name" }
+    },
+    {
+      "id": "BUG-A11Y-CONTRAST",
+      "category": "accessibility",
+      "title": "Footer text has insufficient contrast",
+      "page": "/products",
+      "match": { "type": "accessibility", "rule": "color-contrast" }
+    },
+    {
+      "id": "BUG-A11Y-LINK-NAME",
+      "category": "accessibility",
+      "title": "Icon-only header link has no accessible name",
+      "page": "/products",
+      "match": { "type": "accessibility", "rule": "link-name" }
+    },
+
+    {
+      "id": "BUG-5XX-DB",
+      "category": "server_error",
+      "title": "Trigger DB Call always returns 500",
+      "page": "/",
+      "match": { "type": "network_error", "route": "/api/broken" },
+      "consequences": [{ "type": "runtime_error", "route": "/" }]
+    },
+    {
+      "id": "BUG-5XX-PRODUCT3",
+      "category": "server_error",
+      "title": "Product 3 crashes the product API",
+      "page": "/products/3",
+      "match": { "type": "network_error", "route": "/api/products/:id" },
+      "consequences": [{ "type": "runtime_error", "route": "/products/:id" }]
+    },
+    {
+      "id": "BUG-QTY-BOUNDARY-500",
+      "category": "server_error",
+      "title": "Large order quantity crashes the server instead of a 400",
+      "page": "/cart",
+      "match": { "type": "network_error", "route": "/api/orders" }
+    },
+
+    {
+      "id": "BUG-SLOW-PRODUCTS",
+      "category": "performance",
+      "title": "Catalogue API takes 1.6 s",
+      "page": "/products",
+      "match": { "type": "slow_endpoint", "route": "/api/products" }
+    },
+    {
+      "id": "BUG-SLOW-ITEMS",
+      "category": "performance",
+      "title": "Microservice list takes 1.5 s",
+      "page": "/",
+      "match": { "type": "slow_endpoint", "route": "/api/slow-items" }
+    },
+    {
+      "id": "BUG-HANG-ORDERS",
+      "category": "performance",
+      "title": "Order history request never completes",
+      "page": "/orders",
+      "match": { "type": "hanging_request", "route": "/api/orders/history" }
+    },
+    {
+      "id": "BUG-CLS-BANNER",
+      "category": "performance",
+      "title": "Late promo banner causes a large layout shift",
+      "page": "/products",
+      "match": { "type": "layout_shift", "route": "/products" }
+    },
+
+    {
+      "id": "BUG-BROKEN-LINK-HELP",
+      "category": "navigation",
+      "title": "Help link leads to a 404",
+      "page": "*",
+      "match": { "type": "broken_link", "route": "/help" }
+    },
+    {
+      "id": "BUG-BROKEN-LINK-PRODUCT99",
+      "category": "navigation",
+      "title": "Catalogue links to a deleted product",
+      "page": "/products",
+      "match": { "type": "broken_link", "route": "/products/:id" }
+    },
+    {
+      "id": "BUG-REDIRECT-LOOP",
+      "category": "navigation",
+      "title": "Spring promo link is a redirect loop",
+      "page": "/",
+      "match": { "type": "redirect_loop" }
+    },
+
+    {
+      "id": "BUG-CONSOLE-DEPRECATED",
+      "category": "runtime",
+      "title": "Console error on every catalogue load",
+      "page": "/products",
+      "match": { "type": "runtime_error", "route": "/products" }
+    },
+    {
+      "id": "BUG-UNCAUGHT-COUPON",
+      "category": "runtime",
+      "title": "Apply coupon throws an uncaught TypeError",
+      "page": "/cart",
+      "match": { "type": "runtime_error", "route": "/cart" }
+    },
+
+    {
+      "id": "BUG-DOUBLE-ORDER",
+      "category": "idempotency",
+      "title": "Double-clicking Place order creates two orders",
+      "page": "/cart",
+      "match": { "type": "duplicate_submission", "route": "/api/orders" }
+    },
+    {
+      "id": "BUG-DOUBLE-CART",
+      "category": "idempotency",
+      "title": "Double-clicking Add to cart adds the item twice",
+      "page": "/products/:id",
+      "match": { "type": "duplicate_submission", "route": "/api/cart" }
+    },
+
+    {
+      "id": "BUG-VALIDATION-SIGNUP",
+      "category": "validation",
+      "title": "Sign-up accepts empty and malformed values",
+      "page": "/signup",
+      "match": { "type": "validation", "route": "/api/signup" }
+    },
+    {
+      "id": "BUG-VALIDATION-LOGIN",
+      "category": "validation",
+      "title": "Login accepts malformed email addresses",
+      "page": "/",
+      "discovered": "Found by GhostIQ's first benchmark run, not originally planted.",
+      "match": { "type": "validation", "route": "/api/auth/login" }
+    },
+    {
+      "id": "BUG-VALIDATION-QTY",
+      "category": "validation",
+      "title": "Orders accept zero, negative or fractional quantities",
+      "page": "/cart",
+      "discovered": "Found by GhostIQ's first benchmark run, not originally planted.",
+      "match": { "type": "validation", "route": "/api/orders" }
+    },
+    {
+      "id": "BUG-DOUBLE-SIGNUP",
+      "category": "idempotency",
+      "title": "Double-clicking Create account creates two users",
+      "page": "/signup",
+      "discovered": "Found by GhostIQ's first benchmark run, not originally planted.",
+      "match": { "type": "duplicate_submission", "route": "/api/signup" }
+    },
+    {
+      "id": "BUG-XSS-SEARCH",
+      "category": "security",
+      "title": "Search term is reflected as HTML (script injection)",
+      "page": "/products",
+      "match": { "type": "script_injection", "route": "/products" }
+    },
+    {
+      "id": "BUG-SEC-HEADERS",
+      "category": "security",
+      "title": "No Content-Security-Policy or X-Content-Type-Options",
+      "page": "*",
+      "match": { "type": "security_headers" }
+    },
+    {
+      "id": "BUG-POWERED-BY",
+      "category": "security",
+      "title": "Server advertises X-Powered-By: Express",
+      "page": "*",
+      "match": { "type": "info_exposure", "rule": "x-powered-by" }
+    },
+    {
+      "id": "BUG-INSECURE-COOKIE",
+      "category": "security",
+      "title": "Session cookie lacks HttpOnly and SameSite",
+      "page": "/",
+      "match": { "type": "insecure_cookie" }
+    },
+    {
+      "id": "BUG-STACK-TRACE",
+      "category": "security",
+      "title": "Server stack trace returned to the browser",
+      "page": "/products/3",
+      "match": { "type": "info_exposure", "rule": "stack-trace" }
+    },
+    {
+      "id": "BUG-DEBUG-ENDPOINT",
+      "category": "security",
+      "title": "Debug endpoint leaks secrets",
+      "page": "/api/debug",
+      "match": { "type": "info_exposure", "rule": "secret" }
+    },
+    {
+      "id": "BUG-ADMIN-NO-AUTH",
+      "category": "auth",
+      "title": "Admin console is reachable without logging in",
+      "page": "/admin",
+      "detectable": false,
+      "match": { "type": "auth_boundary", "route": "/admin" }
+    },
+    {
+      "id": "BUG-IDOR-ACCOUNT",
+      "category": "auth",
+      "title": "Other customers' accounts visible by changing the id",
+      "page": "/account/:id",
+      "detectable": false,
+      "match": { "type": "auth_boundary", "route": "/account/:id" }
+    },
+
+    {
+      "id": "BUG-MOBILE-OVERFLOW",
+      "category": "layout",
+      "title": "Catalogue overflows horizontally on phones",
+      "page": "/products",
+      "match": { "type": "layout_overflow", "route": "/products" }
+    },
+    {
+      "id": "BUG-VISUAL-REGRESSION",
+      "category": "visual",
+      "title": "Order button moved and changed colour",
+      "page": "/cart",
+      "requires": "a baseline run, then MOCK_VISUAL_REGRESSION=1",
+      "match": { "type": "visual_regression", "route": "/cart" }
+    }
+  ]
+}

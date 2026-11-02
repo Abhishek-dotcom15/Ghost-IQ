@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cart - Ghost Shop</title>
+    <link rel="stylesheet" href="/shop.css" />
+    <style>
+      /* BUG-VISUAL-REGRESSION: a refactor broke the order button styling and layout. */
+      #order {
+        background: #da3633;
+        margin-left: 60%;
+        width: 40%;
+      }
+      h1 {
+        font-size: 3rem;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <a href="/">Home</a>
+      <a href="/products">Products</a>
+      <a href="/cart">Cart</a>
+    </header>
+    <main>
+      <div class="card">
+        <h1>Your cart</h1>
+        <ul id="items"></ul>
+        <label for="quantity">Quantity</label>
+        <input id="quantity" type="number" value="1" />
+        <label for="coupon">Coupon code</label>
+        <input id="coupon" />
+        <button id="apply">Apply coupon</button>
+        <button id="order">Place order</button>
+        <p id="status" class="status"></p>
+      </div>
+    </main>
+    <footer>Ghost Shop · <a href="/help" style="color: #3d444d">Help</a></footer>
+    <script>
+      fetch('/api/cart')
+        .then((r) => r.json())
+        .then((data) => {
+          document.getElementById('items').innerHTML = data.items.length
+            ? data.items.map((i) => '<li>' + i.name + '</li>').join('')
+            : '<li>Your cart is empty</li>';
+        });
+      document.getElementById('apply').addEventListener('click', () => {
+        const coupons = window.shopConfig.coupons;
+        document.getElementById('status').textContent = coupons.length + ' coupons';
+      });
+      document.getElementById('order').addEventListener('click', async () => {
+        const res = await fetch('/api/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ quantity: document.getElementById('quantity').value }),
+        });
+        const data = await res.json();
+        document.getElementById('status').textContent = res.ok
+          ? 'Order #' + data.id + ' placed!'
+          : 'Order failed: ' + data.error;
+      });
+    </script>
+  </body>
+</html>

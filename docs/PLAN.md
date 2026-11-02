@@ -1,6 +1,8 @@
 # GhostIQ — Build Plan (v2)
 
-Status: Phases 0-3 complete (v0.5.0). Next: Phase 4 (findings and oracles). Last updated: 2026-11-01.
+Status: Phases 0-4 complete (v0.6.0). Next: Phase 5 (healing, replay, export, analytics). Last updated: 2026-11-02.
+
+**Phase 4 result:** seeded-bug benchmark (B1, demo mode, 8 personas) found 29/33 bugs (94% of detectable) at 90% precision; details in EVALUATION.md. Deferred from Phase 4: the vision-LLM judge (moved to Phase 5, after replay exists to verify its suspicions) and visual-diff masks for dynamic regions.
 
 **Measured so far.** Phase 2 benchmark (`node scripts/smoke.mjs --runs 5`) in demo mode: 5/5 runs reach `goal_met` on the mock app login, 3 actions, ~1.7 s per run. Phase 3: the smoke test also proves seeded reproducibility end to end (two form-stress-tester runs with seed 1234 type identical values; seed 99 differs). These check pipeline reliability only; the real-model baseline needs `--live` with an API key and has not been recorded yet.
 Source idea: `GhostIQ_Project_Blueprint.pdf`. This document records where the code

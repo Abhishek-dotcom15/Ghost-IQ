@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>My orders - Ghost Shop</title>
+    <link rel="stylesheet" href="/shop.css" />
+  </head>
+  <body>
+    <header>
+      <a href="/">Home</a>
+      <a href="/products">Products</a>
+      <a href="/cart">Cart</a>
+    </header>
+    <main>
+      <div class="card">
+        <h1>My orders</h1>
+        <!-- BUG-HANG-ORDERS: the history request never returns; this spinner never stops. -->
+        <p id="status" class="status">Loading your orders…</p>
+        <p><a href="/account/1">My account</a></p>
+      </div>
+    </main>
+    <footer>Ghost Shop · <a href="/help" style="color: #3d444d">Help</a></footer>
+    <script>
+      fetch('/api/orders/history')
+        .then((r) => r.json())
+        .then((d) => (document.getElementById('status').textContent = d.length + ' orders'));
+    </script>
+  </body>
+</html>

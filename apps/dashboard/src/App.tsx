@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   PlayCircle,
   BarChart3,
+  Bug,
   Users,
   Settings,
   Plus,
@@ -12,6 +13,7 @@ import DashboardView from './components/DashboardView';
 import SessionsView from './components/SessionsView';
 import EndpointsView from './components/EndpointsView';
 import PersonaBuilder from './components/PersonaBuilder';
+import FindingsView from './components/FindingsView';
 import LlmStatusPanel from './components/LlmStatusPanel';
 import { io } from 'socket.io-client';
 
@@ -35,7 +37,7 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [currentView, setCurrentView] = useState<
-    'dashboard' | 'sessions' | 'endpoints' | 'personas' | 'settings'
+    'dashboard' | 'sessions' | 'findings' | 'endpoints' | 'personas' | 'settings'
   >('dashboard');
   const [newProjectName, setNewProjectName] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -224,6 +226,14 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => setCurrentView('findings')}
+            className={`btn ${currentView === 'findings' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ justifyContent: 'flex-start', width: '100%' }}
+          >
+            <Bug size={18} /> Findings
+          </button>
+
+          <button
             onClick={() => setCurrentView('endpoints')}
             className={`btn ${currentView === 'endpoints' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ justifyContent: 'flex-start', width: '100%' }}
@@ -297,6 +307,7 @@ export default function App() {
             <h2 style={{ fontFamily: 'var(--font-title)', fontWeight: 700, fontSize: '1.75rem' }}>
               {currentView === 'dashboard' && 'Project Summary'}
               {currentView === 'sessions' && 'Autonomous Test Suites'}
+              {currentView === 'findings' && 'Findings'}
               {currentView === 'endpoints' && 'API Analytics'}
               {currentView === 'personas' && 'AI Personas'}
               {currentView === 'settings' && 'Platform Settings'}
@@ -364,6 +375,9 @@ export default function App() {
             )}
             {currentView === 'sessions' && (
               <SessionsView project={selectedProject} socket={socket} />
+            )}
+            {currentView === 'findings' && (
+              <FindingsView project={selectedProject} socket={socket} />
             )}
             {currentView === 'endpoints' && <EndpointsView project={selectedProject} />}
             {currentView === 'personas' && <PersonaBuilder project={selectedProject} />}

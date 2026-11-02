@@ -193,7 +193,8 @@ async function main() {
     console.log('\n--- Reproducibility: form-stress-tester, seeds 1234, 1234, 99 ---');
     const fingerprint = (r) =>
       JSON.stringify(r.steps.map((s) => [s.action, s.behavior ?? null, s.value ?? null]));
-    const goal = 'Stress the login form.';
+    // A login goal (not an exploration goal) keeps the scripted demo planner on the login form.
+    const goal = 'Log in to the shop.';
     const a = await runOnce('seed 1234 (a)', { personaId: 'form-stress-tester', seed: 1234, goal });
     const b = await runOnce('seed 1234 (b)', { personaId: 'form-stress-tester', seed: 1234, goal });
     const c = await runOnce('seed 99', { personaId: 'form-stress-tester', seed: 99, goal });

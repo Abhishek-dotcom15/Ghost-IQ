@@ -20,6 +20,8 @@ import {
 import { z } from 'zod';
 import type { PrismaClient } from './db.js';
 import type { Env } from './env.js';
+import { FindingsEngine, type FindingChange } from './findings/engine.js';
+import { registerFindingRoutes } from './findings/routes.js';
 import { computeFlakinessScore, updateRunningAverage } from './lib/flakiness.js';
 import { describeLlm, type LlmRuntime } from './llm.js';
 import type { AiService } from './services/ai.js';
@@ -117,6 +119,20 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
 
   const screenshotsDir = path.resolve(env.GHOSTIQ_SCREENSHOT_DIR);
   const artifactsDir = path.resolve(env.GHOSTIQ_ARTIFACT_DIR);
+  const findings = new FindingsEngine(prisma, {
+    screenshots: screenshotsDir,
+    artifacts: artifactsDir,
+  });
+
+  /** Live updates: the run view refreshes its findings, the inbox shows new ones. */
+  const announceFindings = (sessionId: string, projectId: string, changes: FindingChange[]) => {
+    pushUpdate(sessionId, 'findings-updated', { count: changes.length });
+    io.emit('findings-updated', {
+      projectId,
+      newFindings: changes.filter((c) => c.isNew).length,
+      regressed: changes.filter((c) => c.regressed).length,
+    });
+  };
   fs.mkdirSync(screenshotsDir, { recursive: true });
   fs.mkdirSync(artifactsDir, { recursive: true });
 
@@ -216,11 +232,19 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
             observationHash: data.observationHash ?? null,
             issuesJson: data.issues.length ? JSON.stringify(data.issues) : null,
             behavior: data.behavior ?? null,
+            inputJson: data.input ? JSON.stringify(data.input) : null,
           },
         });
 
         await recordNetwork(prisma, session.projectId, step.id, data.networkRequests);
         pushUpdate(session.id, 'step-completed', { ...step, networkLogs: data.networkRequests });
+
+        const changes = await findings.recordStep(
+          { id: session.id, projectId: session.projectId, persona: session.persona },
+          { stepNumber: step.stepNumber, url: step.url, screenshotPath: step.screenshotPath },
+          data.issues,
+        );
+        if (changes.length) announceFindings(session.id, session.projectId, changes);
       } catch (err) {
         console.error('[agent] failed to persist step:', err);
       }
@@ -261,6 +285,12 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
           where: { id: session.id },
           data: { flakinessScore: computeFlakinessScore(history.map((h) => h.status)) },
         });
+
+        const persona = session.personaId ? await personas.get(session.personaId) : null;
+        const runLevel = await findings.finalizeSession(session.id, {
+          throttled: (persona?.spec.network ?? 'none') !== 'none',
+        });
+        if (runLevel.length) announceFindings(session.id, session.projectId, runLevel);
 
         if (data.status === 'FAILED') void runDiagnostics(session.id);
         pushUpdate(session.id, 'session-completed', data);
@@ -563,8 +593,12 @@ export function createApp({ env, prisma, ai, llm, personas }: AppDeps): GhostIqA
       where: { id: session.id },
       data: { isBaseline: true },
     });
-    res.json(updated);
+    // Its page screenshots become the reference for visual regression.
+    const baselineImages = await findings.captureBaseline(session.id);
+    res.json({ ...updated, baselineImages });
   });
+
+  registerFindingRoutes(app, prisma);
 
   app.get('/api/projects/:id/baseline', async (req, res) => {
     const { targetUrl, persona } = req.query;

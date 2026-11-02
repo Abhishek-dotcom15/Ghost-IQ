@@ -294,6 +294,22 @@ describe('runAgent', () => {
     expect(t.driver.executed).toHaveLength(2);
   });
 
+  it('does not count waiting on an unchanged page as a loop', async () => {
+    const t = setup(
+      [
+        { type: 'wait', ms: 1000, reason: 'loading' },
+        { type: 'wait', ms: 1000, reason: 'still loading' },
+        { type: 'wait', ms: 1000, reason: 'still loading' },
+        { type: 'finish', goalMet: false, summary: 'spinner never stopped' },
+      ],
+      { budgets: { maxSteps: 10 } },
+    );
+    t.driver.mutates = false;
+    const outcome = await t.run();
+    expect(outcome.endReason).toBe('goal_not_met');
+    expect(t.driver.executed).toHaveLength(3);
+  });
+
   it('stops with planner_error when the planner fails', async () => {
     const t = setup([]);
     const outcome = await runAgent({

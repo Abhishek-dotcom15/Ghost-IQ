@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Create account - Ghost Shop</title>
+    <link rel="stylesheet" href="/shop.css" />
+  </head>
+  <body>
+    <header>
+      <a href="/">Home</a>
+      <a href="/products">Products</a>
+    </header>
+    <main>
+      <div class="card">
+        <h1>Create an account</h1>
+        <!-- BUG-VALIDATION-SIGNUP: novalidate and no server checks, anything is accepted. -->
+        <form id="signup" novalidate>
+          <label for="full-name">Full name</label>
+          <input id="full-name" />
+          <label for="signup-email">Email</label>
+          <input id="signup-email" type="email" />
+          <label for="age">Age</label>
+          <input id="age" type="number" />
+          <button type="submit">Create account</button>
+        </form>
+        <p id="status" class="status"></p>
+      </div>
+    </main>
+    <footer>Ghost Shop · <a href="/help" style="color: #3d444d">Help</a></footer>
+    <script>
+      document.getElementById('signup').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const res = await fetch('/api/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: document.getElementById('full-name').value,
+            email: document.getElementById('signup-email').value,
+            age: document.getElementById('age').value,
+          }),
+        });
+        const user = await res.json();
+        document.getElementById('status').textContent = 'Welcome, ' + user.name + '!';
+      });
+    </script>
+  </body>
+</html>

@@ -93,9 +93,11 @@ stored as a durable locator (`page.getByRole(role, { name })`) for replay and ex
 | Runaway runs                | Budgets for actions, wall time and tokens; the same page state 3 times ends the run (`loop_detected`); 3 failed actions in a row end it (`stuck`); cancel at any time              |
 | Secret leakage              | Values typed into password/token/key fields are stored and streamed as `••••••`                                                                                                    |
 
-**Bugs never stop a run.** Console errors, uncaught exceptions, 5xx responses and failed requests
-are attached to the step as `issues` and the agent keeps going. Phase 4 turns them into
-deduplicated, severity-ranked Findings.
+**Bugs never stop a run.** Oracles in the runner attach raw `issues` to each step and the agent keeps going.
+
+## Findings engine
+
+`apps/server/src/findings`: `classify.ts` maps each raw issue to a finding type, route template and severity (pure, unit-tested); `engine.ts` fingerprints it (type + route + rule or normalized message), upserts the project's Finding (recurrence count, personas, latest evidence, repro steps of the first occurrence) and records an occurrence per run. Dismissed findings stay dismissed when they recur; fixed findings reopen as regressions. When a run finishes, run-level oracles execute: slow endpoints (skipped for throttled personas) and accepted invalid input (heuristic, marked _suspected_). Visual regression compares page-arrival screenshots with the baseline run's, keyed by exact path and screenshot size. `reports.ts` renders HTML, JSON, JUnit and SARIF.
 
 **End reasons:** `goal_met`, `goal_not_met`, `budget_steps`, `budget_time`, `budget_tokens`,
 `loop_detected`, `stuck`, `planner_error`, `start_failed`, `cancelled`, `runner_error`,

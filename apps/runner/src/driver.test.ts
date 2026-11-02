@@ -21,7 +21,7 @@ const PAGE = `<!doctype html>
 <h1>Shop</h1>
 <label for="q">Search</label><input id="q" />
 <button id="broken" onclick="fetch('/api/broken')">Load stock</button>
-<button id="crash" onclick="setTimeout(() => { throw new Error('boom') })">Crash</button>
+<button id="crash" onclick="console.error('boom'); setTimeout(() => { throw new Error('boom') })">Crash</button>
 <a href="https://example.org/offsite">Partner site</a>
 <a href="/about">About</a>`;
 

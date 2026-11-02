@@ -585,6 +585,24 @@ export default function SessionsView({ project, socket }: SessionsViewProps) {
                       Download Playwright trace
                     </a>
                   )}
+                  {sessionDetail.status !== 'RUNNING' &&
+                    (['html', 'junit', 'sarif'] as const).map((format) => (
+                      <a
+                        key={format}
+                        href={`/api/sessions/${sessionDetail.id}/report?format=${format}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn btn-secondary"
+                        style={{
+                          fontSize: '0.7rem',
+                          padding: '0.2rem 0.6rem',
+                          textDecoration: 'none',
+                        }}
+                        title="Findings of this run"
+                      >
+                        Report {format.toUpperCase()}
+                      </a>
+                    ))}
                 </div>
               </div>
 

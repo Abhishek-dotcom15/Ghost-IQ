@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Products - Ghost Shop</title>
+    <link rel="stylesheet" href="/shop.css" />
+    <style>
+      /* BUG-MOBILE-OVERFLOW: the catalogue table never shrinks; phones scroll sideways. */
+      table {
+        min-width: 900px;
+        border-collapse: collapse;
+      }
+      td,
+      th {
+        padding: 0.5rem;
+        border-bottom: 1px solid #30363d;
+        text-align: left;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <a href="/">Home</a>
+      <a href="/products">Products</a>
+      <a href="/cart">Cart</a>
+      <!-- BUG-A11Y-LINK-NAME: icon-only link with no accessible name. -->
+      <a href="/orders"
+        ><svg width="16" height="16" viewBox="0 0 16 16">
+          <rect width="16" height="16" fill="#58a6ff" /></svg
+      ></a>
+    </header>
+    <main>
+      <div id="promo-slot"></div>
+      <div class="card">
+        <h1>Products</h1>
+        <form id="search-form">
+          <label for="q">Search products</label>
+          <input id="q" name="q" />
+          <button type="submit">Search</button>
+        </form>
+        <p id="search-echo" class="status"></p>
+        <p id="loading" class="status">Loading catalogue…</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Price</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <!-- BUG-BROKEN-LINK-PRODUCT99: links to a product that was deleted. -->
+        <p><a href="/products/99">Limited edition: Wraith Cap</a></p>
+      </div>
+    </main>
+    <footer>Ghost Shop · <a href="/help" style="color: #3d444d">Help</a></footer>
+    <script>
+      // BUG-CONSOLE-DEPRECATED: a noisy error on every load.
+      console.error('[shop] analytics.track() is deprecated and will be removed');
+
+      // BUG-CLS-BANNER: a promo banner is injected late and pushes the page down.
+      setTimeout(() => {
+        const banner = document.createElement('div');
+        banner.className = 'card';
+        banner.style.height = '160px';
+        banner.textContent = 'Spring sale: 20% off everything!';
+        document.getElementById('promo-slot').appendChild(banner);
+      }, 700);
+
+      async function load(q) {
+        document.getElementById('loading').hidden = false;
+        const res = await fetch('/api/products?q=' + encodeURIComponent(q || ''));
+        const data = await res.json();
+        document.getElementById('loading').hidden = true;
+        // BUG-XSS-SEARCH: the search term is echoed back with innerHTML.
+        document.getElementById('search-echo').innerHTML = data.query
+          ? 'You searched for <b>' + data.query + '</b>'
+          : '';
+        document.getElementById('rows').innerHTML = data.items
+          .map(
+            (p) =>
+              '<tr><td>' +
+              p.name +
+              '</td><td>$' +
+              p.price +
+              '</td><td><a href="/products/' +
+              p.id +
+              '">View ' +
+              p.name +
+              '</a></td></tr>',
+          )
+          .join('');
+      }
+      document.getElementById('search-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        load(document.getElementById('q').value);
+      });
+      load('');
+    </script>
+  </body>
+</html>

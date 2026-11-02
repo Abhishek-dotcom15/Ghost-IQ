@@ -384,6 +384,187 @@ describe('runner protocol', () => {
   });
 });
 
+describe('findings engine', () => {
+  /** Starts a run for a persona, plays steps through the socket, finishes it, returns its id. */
+  async function playRun(
+    agent: Socket,
+    projectId: string,
+    personaId: string,
+    steps: Array<Record<string, unknown>>,
+  ): Promise<string> {
+    const received = new Promise<RunTestCommand>((resolve) =>
+      agent.once(SocketEvents.runStart, resolve),
+    );
+    const started = await request(app).post('/api/sessions').send({
+      projectId,
+      targetUrl: 'http://shop.test/',
+      personaId,
+      consent: true,
+    });
+    expect(started.status).toBe(201);
+    const { sessionId } = await received;
+    steps.forEach((step, i) =>
+      agent.emit(SocketEvents.stepCompleted, {
+        sessionId,
+        stepNumber: i + 1,
+        action: 'CLICK',
+        description: `step ${i + 1}`,
+        status: 'PASSED',
+        url: 'http://shop.test/cart',
+        ...step,
+      }),
+    );
+    await waitFor(
+      async () => (await prisma.testStep.count({ where: { sessionId } })) === steps.length,
+    );
+    agent.emit(SocketEvents.sessionCompleted, {
+      sessionId,
+      status: 'PASSED',
+      endReason: 'goal_met',
+      summary: 'done',
+      stats: { steps: steps.length, tokens: 0, durationMs: 1, issues: 0 },
+    });
+    await waitFor(
+      async () =>
+        (await prisma.testSession.findUnique({ where: { id: sessionId } }))?.status === 'PASSED',
+    );
+    return sessionId;
+  }
+
+  const coupon = {
+    kind: 'page_error',
+    message: "Uncaught TypeError: Cannot read properties of undefined (reading 'coupons')",
+  };
+  const xss = {
+    kind: 'script_injection',
+    message: 'Typed text ran as <script>alert(1)</script>',
+    url: 'http://shop.test/products',
+  };
+
+  it('deduplicates across runs, attributes personas, and remembers triage', async () => {
+    const project = await prisma.project.create({ data: { name: 'Findings' } });
+    const agent = await connectAgent(project.id);
+
+    const first = await playRun(agent, project.id, 'happy-path', [
+      { action: 'GOTO', description: 'Open shop' },
+      { issues: [coupon], value: 'x' },
+    ]);
+    await playRun(agent, project.id, 'impatient-user', [
+      { action: 'GOTO', description: 'Open shop' },
+      { issues: [coupon, xss] },
+    ]);
+
+    const list = await request(app).get(`/api/projects/${project.id}/findings`);
+    expect(list.body.summary.total).toBe(2);
+    const [critical, runtime] = list.body.findings;
+    expect(critical).toMatchObject({
+      type: 'script_injection',
+      severity: 'critical',
+      personas: ['Impatient User'],
+    });
+    expect(runtime).toMatchObject({
+      type: 'runtime_error',
+      route: '/cart',
+      recurrences: 2,
+      personas: ['Happy Path User', 'Impatient User'],
+    });
+    expect(runtime.repro).toEqual(['1. Open shop', '2. step 2 with "x"']);
+    expect(runtime.evidence.sessionId).not.toBe(first);
+    expect(list.body.summary.byPersona).toEqual([
+      { persona: 'Impatient User', total: 2, unique: 1 },
+      { persona: 'Happy Path User', total: 1, unique: 0 },
+    ]);
+
+    // Dismissed stays dismissed when seen again; fixed reopens as a regression.
+    await request(app)
+      .patch(`/api/findings/${critical.id}`)
+      .send({ status: 'dismissed', note: 'test data' });
+    await request(app).patch(`/api/findings/${runtime.id}`).send({ status: 'fixed' });
+    expect(
+      (await request(app).patch(`/api/findings/${runtime.id}`).send({ status: 'nope' })).status,
+    ).toBe(400);
+    const third = await playRun(agent, project.id, 'chaotic-explorer', [{ issues: [coupon, xss] }]);
+
+    const after = (await request(app).get(`/api/projects/${project.id}/findings`)).body.findings;
+    expect(after.find((f: { id: string }) => f.id === critical.id)).toMatchObject({
+      status: 'dismissed',
+      recurrences: 2,
+    });
+    expect(after.find((f: { id: string }) => f.id === runtime.id)).toMatchObject({
+      status: 'open',
+      recurrences: 3,
+    });
+    expect(after.find((f: { id: string }) => f.id === runtime.id).triageNote).toContain(
+      'Regressed',
+    );
+
+    const scoped = await request(app).get(`/api/sessions/${third}/findings`);
+    expect(scoped.body.summary.total).toBe(2);
+    agent.disconnect();
+  });
+
+  it('runs run-level oracles when a run finishes', async () => {
+    const project = await prisma.project.create({ data: { name: 'Run level' } });
+    const agent = await connectAgent(project.id);
+    const sessionId = await playRun(agent, project.id, 'form-stress-tester', [
+      {
+        action: 'FILL',
+        value: '',
+        input: { strategy: 'empty', kind: 'email', field: 'Email' },
+        networkRequests: [
+          { url: 'http://shop.test/api/products?q=a', method: 'GET', status: 200, latencyMs: 1650 },
+        ],
+      },
+      {
+        networkRequests: [
+          { url: 'http://shop.test/api/signup', method: 'POST', status: 201, latencyMs: 20 },
+        ],
+      },
+    ]);
+    const { findings } = (await request(app).get(`/api/sessions/${sessionId}/findings`)).body;
+    expect(
+      findings.map((f: { type: string; route: string }) => `${f.type} ${f.route}`).sort(),
+    ).toEqual(['slow_endpoint /api/products', 'validation /api/signup']);
+    expect(findings.find((f: { type: string }) => f.type === 'validation').confidence).toBe(
+      'suspected',
+    );
+    agent.disconnect();
+  });
+
+  it('renders JSON, HTML, JUnit and SARIF reports with escaping', async () => {
+    const project = await prisma.project.create({ data: { name: 'Reports' } });
+    const agent = await connectAgent(project.id);
+    const sessionId = await playRun(agent, project.id, 'happy-path', [{ issues: [xss, coupon] }]);
+
+    const json = await request(app).get(`/api/sessions/${sessionId}/report?format=json`);
+    expect(json.body.summary).toMatchObject({ critical: 1, high: 1 });
+    expect(json.body.run.persona).toBe('Happy Path User');
+
+    const html = await request(app).get(`/api/sessions/${sessionId}/report?format=html`);
+    expect(html.headers['content-type']).toContain('text/html');
+    expect(html.text).not.toContain('<script>alert(1)</script>');
+    expect(html.text).toContain('&lt;script&gt;');
+
+    const junit = await request(app).get(`/api/sessions/${sessionId}/report?format=junit`);
+    expect(junit.text).toContain('<testsuites name="GhostIQ" tests="3" failures="2">');
+
+    const sarif = await request(app).get(`/api/sessions/${sessionId}/report?format=sarif`);
+    const doc = JSON.parse(sarif.text);
+    expect(doc.version).toBe('2.1.0');
+    expect(doc.runs[0].results.map((r: { level: string }) => r.level)).toEqual(['error', 'error']);
+    expect(doc.runs[0].tool.driver.rules.map((r: { id: string }) => r.id)).toContain(
+      'ghostiq/script_injection',
+    );
+
+    expect((await request(app).get(`/api/sessions/${sessionId}/report?format=pdf`)).status).toBe(
+      400,
+    );
+    const projectReport = await request(app).get(`/api/projects/${project.id}/report?format=json`);
+    expect(projectReport.body.findings).toHaveLength(2);
+    agent.disconnect();
+  });
+});
+
 describe('personas API', () => {
   const CUSTOM = `id: checkout-rusher
 name: Checkout Rusher

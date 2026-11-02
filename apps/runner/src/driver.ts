@@ -1,8 +1,10 @@
 import fs from 'node:fs';
+import AxeBuilder from '@axe-core/playwright';
 import type { BrowserDriver, Observation, StepSignals } from '@ghostiq/core';
 import type { NetworkConditions, ResolvedDevice } from '@ghostiq/personas';
 import {
   isAllowedUrl,
+  normalizeRoute,
   parseAriaSnapshot,
   type AgentAction,
   type NetworkRequestRecord,
@@ -15,7 +17,14 @@ import {
   type CDPSession,
   type Page,
   type Request,
+  type Response,
 } from 'playwright';
+import {
+  DuplicateSubmissionDetector,
+  checkCookies,
+  checkSecurityHeaders,
+  scanBody,
+} from './oracles.js';
 
 export interface DriverOptions {
   allowedOrigins: string[];
@@ -34,14 +43,55 @@ export interface DriverOptions {
 
 const NAVIGATION_TIMEOUT_MS = 20_000;
 const SCROLL_PX = 600;
+/** A request with no response after this long is reported as hanging (spinner-forever). */
+const HANG_MS = 8_000;
+/** Bodies above this size are not scanned. */
+const MAX_SCAN_BYTES = 200_000;
+/** Core Web Vitals "poor" thresholds. */
+const CLS_POOR = 0.1;
+const LCP_POOR_MS = 4000;
+const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
+/** Text our naughty-string probes make an injected script show (see personas inputs). */
+const PROBE_DIALOG = /^(ghostiq|1)$/;
 
-/** Playwright implementation of the agent's browser: observation, actions, guardrails, evidence. */
+/** Collects layout-shift and LCP in the page; read at the end of each step. */
+const VITALS_SCRIPT = `(() => {
+  const vitals = (window.__ghostiqVitals = { cls: 0, lcp: 0 });
+  try {
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) if (!e.hadRecentInput) vitals.cls += e.value;
+    }).observe({ type: 'layout-shift', buffered: true });
+    new PerformanceObserver((list) => {
+      const entries = list.getEntries();
+      if (entries.length) vitals.lcp = entries[entries.length - 1].startTime;
+    }).observe({ type: 'largest-contentful-paint', buffered: true });
+  } catch {}
+})();`;
+
+interface AxeViolation {
+  id: string;
+  impact?: 'minor' | 'moderate' | 'serious' | 'critical' | null;
+  help: string;
+  helpUrl: string;
+  nodes: Array<{ html: string }>;
+}
+
+/** Playwright implementation of the agent's browser: observation, actions, guardrails, oracles. */
 export class PlaywrightDriver implements BrowserDriver {
   private network: NetworkRequestRecord[] = [];
   private issues: StepIssue[] = [];
   private readonly started = new Map<Request, number>();
+  private readonly hangReported = new WeakSet<Request>();
+  /** Async oracle work (body scans, cookie reads) that must finish before a step is collected. */
+  private readonly pending = new Set<Promise<void>>();
+  /** Each defect is reported once per run; the server merges across runs. */
+  private readonly reported = new Set<string>();
+  private readonly auditedStates = new Set<string>();
+  private readonly duplicates = new DuplicateSubmissionDetector();
   /** Where to return after a blocked navigation leaves Chromium on its error page. */
   private lastAllowedUrl: string | undefined;
+  /** True while axe-core runs (it opens a helper page that the popup guard must ignore). */
+  private auditing = false;
 
   private constructor(
     private readonly browser: Browser,
@@ -73,6 +123,7 @@ export class PlaywrightDriver implements BrowserDriver {
       storageState,
     });
     if (options.trace) await context.tracing.start({ screenshots: true, snapshots: true });
+    await context.addInitScript(VITALS_SCRIPT);
     const page = await context.newPage();
     let cdp: CDPSession | undefined;
     if (options.network) {
@@ -87,6 +138,18 @@ export class PlaywrightDriver implements BrowserDriver {
     await driver.installGuards();
     driver.installListeners();
     return driver;
+  }
+
+  /** Adds an issue unless the same defect was already reported in this run. */
+  private report(key: string, issue: StepIssue) {
+    if (this.reported.has(key)) return;
+    this.reported.add(key);
+    this.issues.push(issue);
+  }
+
+  private track(work: Promise<void>) {
+    const p = work.catch(() => {}).finally(() => this.pending.delete(p));
+    this.pending.add(p);
   }
 
   /** Origin allowlist enforced in the browser itself: off-site main-frame navigations are aborted. */
@@ -112,8 +175,9 @@ export class PlaywrightDriver implements BrowserDriver {
     });
 
     // New tabs/windows are outside the agent's view: close them and note it.
+    // (axe-core opens a helper page of its own while it runs; that one must stay.)
     this.context.on('page', (popup) => {
-      if (popup === this.page) return;
+      if (popup === this.page || this.auditing) return;
       this.issues.push({
         kind: 'blocked_navigation',
         message: `Closed a popup window (${popup.url() || 'about:blank'}).`,
@@ -138,20 +202,25 @@ export class PlaywrightDriver implements BrowserDriver {
       if (startedAt === undefined) return;
       this.started.delete(request);
       const status = response.status();
-      this.network.push({
-        url: request.url(),
-        method: request.method(),
-        status,
-        latencyMs: Date.now() - startedAt,
-      });
+      const url = request.url();
+      const method = request.method();
+      this.network.push({ url, method, status, latencyMs: Date.now() - startedAt });
+
       if (status >= 500) {
         this.issues.push({
           kind: 'http_error',
-          message: `${request.method()} ${request.url()} returned ${status}.`,
-          url: request.url(),
+          message: `${method} ${url} returned ${status}.`,
+          url,
           status,
+          method,
         });
       }
+      if (status >= 200 && status < 300) {
+        const duplicate = this.duplicates.observe(method, url, request.postData(), Date.now());
+        if (duplicate) this.report(`dup|${method}|${normalizeRoute(url)}`, duplicate);
+      }
+      if (isMainFrameDocument(request, this.page)) this.inspectDocument(response);
+      this.track(this.inspectResponse(response));
     });
 
     this.page.on('requestfailed', (request) => {
@@ -167,24 +236,36 @@ export class PlaywrightDriver implements BrowserDriver {
         status: 0,
         latencyMs: Date.now() - startedAt,
       });
+      if (/TOO_MANY_REDIRECTS/.test(reason)) {
+        this.report(`loop|${normalizeRoute(request.url())}`, {
+          kind: 'redirect_loop',
+          message: `${request.url()} redirects in a loop (${reason}).`,
+          url: request.url(),
+        });
+        return;
+      }
       this.issues.push({
         kind: 'request_failed',
         message: `${request.method()} ${request.url()} failed: ${reason}`,
         url: request.url(),
+        method: request.method(),
       });
     });
 
     this.page.on('framenavigated', (frame) => {
-      if (
-        frame === this.page.mainFrame() &&
-        isAllowedUrl(frame.url(), this.options.allowedOrigins)
-      ) {
-        this.lastAllowedUrl = frame.url();
+      if (frame !== this.page.mainFrame()) return;
+      if (isAllowedUrl(frame.url(), this.options.allowedOrigins)) this.lastAllowedUrl = frame.url();
+      // Leaving a page cancels its in-flight fetches, but Chromium does not always report
+      // that as a failure. Forget them, or they would look like hanging requests.
+      for (const request of this.started.keys()) {
+        if (request.resourceType() !== 'document') this.started.delete(request);
       }
     });
 
     this.page.on('console', (message) => {
       if (message.type() !== 'error') return;
+      // Chromium's own "Failed to load resource" lines duplicate the network oracle.
+      if (/^Failed to load resource/.test(message.text())) return;
       this.issues.push({
         kind: 'console_error',
         message: message.text().slice(0, 2000),
@@ -197,14 +278,67 @@ export class PlaywrightDriver implements BrowserDriver {
         kind: 'page_error',
         message: `Uncaught ${error.name}: ${error.message}`.slice(0, 2000),
         url: this.page.url(),
+        detail: error.stack?.slice(0, 2000),
       });
     });
+
+    // A dialog with our probe text means a string we typed was executed as script (XSS).
+    this.page.on('dialog', (dialog) => {
+      if (dialog.type() !== 'beforeunload' && PROBE_DIALOG.test(dialog.message())) {
+        this.report(`xss|${normalizeRoute(this.page.url())}`, {
+          kind: 'script_injection',
+          message: `Text typed into the page was executed as script: a ${dialog.type()} showed "${dialog.message()}".`,
+          url: this.page.url(),
+          detail: dialog.message(),
+        });
+      }
+      void dialog.dismiss().catch(() => {});
+    });
+  }
+
+  /** Header and status checks for a top-level page load. */
+  private inspectDocument(response: Response) {
+    const url = response.url();
+    const status = response.status();
+    const route = normalizeRoute(url);
+    if (status === 404 || status === 410) {
+      this.report(`404|${route}`, {
+        kind: 'broken_link',
+        message: `Navigated to ${new URL(url).pathname}, which returned ${status}.`,
+        url,
+        status,
+      });
+    }
+    const origin = new URL(url).origin;
+    for (const issue of checkSecurityHeaders(response.headers(), url)) {
+      this.report(`hdr|${origin}|${issue.rule}`, issue);
+    }
+  }
+
+  /** Cookies and body scans; async because they read headers and bodies. */
+  private async inspectResponse(response: Response) {
+    const url = response.url();
+    const cookies = await response.headerValues('set-cookie');
+    for (const issue of checkCookies(cookies, url)) this.report(`cookie|${issue.rule}`, issue);
+
+    const type = response.headers()['content-type'] ?? '';
+    const scannable = /json|text|html/.test(type);
+    const length = Number(response.headers()['content-length'] ?? 0);
+    if (!scannable || length > MAX_SCAN_BYTES) return;
+    const body = await response.text();
+    for (const issue of scanBody(body, url, response.status())) {
+      this.report(`body|${issue.rule}|${normalizeRoute(url)}`, issue);
+    }
   }
 
   async open(url: string): Promise<void> {
     const response = await this.page.goto(url, { waitUntil: 'domcontentloaded' });
-    if (!response) return;
-    if (response.status() >= 400 && response.status() < 500) {
+    if (
+      response &&
+      response.status() >= 400 &&
+      response.status() !== 404 &&
+      response.status() < 500
+    ) {
       this.issues.push({
         kind: 'http_error',
         message: `Start page returned ${response.status()}.`,
@@ -219,6 +353,9 @@ export class PlaywrightDriver implements BrowserDriver {
   }
 
   async observe(): Promise<Observation> {
+    // Chromium can commit its error page after the failed navigation already returned;
+    // never let the agent look at (or act from) a page outside the allowed origins.
+    await this.returnIfOffsite();
     const snapshot = await this.page.ariaSnapshot({ mode: 'ai', timeout: 10_000 });
     return {
       url: this.page.url(),
@@ -229,6 +366,16 @@ export class PlaywrightDriver implements BrowserDriver {
   }
 
   async execute(action: Exclude<AgentAction, { type: 'finish' }>): Promise<void> {
+    try {
+      await this.perform(action);
+      await this.page.waitForLoadState('domcontentloaded', { timeout: 5_000 }).catch(() => {});
+    } finally {
+      // Also after failures: a redirect loop or blocked navigation leaves chrome-error://.
+      await this.returnIfOffsite();
+    }
+  }
+
+  private async perform(action: Exclude<AgentAction, { type: 'finish' }>): Promise<void> {
     const page = this.page;
     switch (action.type) {
       case 'click':
@@ -236,9 +383,12 @@ export class PlaywrightDriver implements BrowserDriver {
         break;
       case 'fill': {
         const field = page.getByRef(action.ref);
-        if (this.options.typingDelayMs) {
+        const isNumber = (await field.getAttribute('type').catch(() => null)) === 'number';
+        if (this.options.typingDelayMs || isNumber) {
+          // Number inputs reject fill() with non-numeric text; type it like a user would
+          // and let the browser decide what it accepts.
           await field.clear();
-          await field.pressSequentially(action.text, { delay: this.options.typingDelayMs });
+          await field.pressSequentially(action.text, { delay: this.options.typingDelayMs ?? 0 });
         } else {
           await field.fill(action.text);
         }
@@ -275,8 +425,6 @@ export class PlaywrightDriver implements BrowserDriver {
         await page.waitForTimeout(action.ms);
         break;
     }
-    await page.waitForLoadState('domcontentloaded', { timeout: 5_000 }).catch(() => {});
-    await this.returnIfOffsite();
   }
 
   /**
@@ -284,26 +432,156 @@ export class PlaywrightDriver implements BrowserDriver {
    * allowed page so the agent keeps exploring the app instead of an error screen.
    */
   private async returnIfOffsite() {
-    const current = this.page.url();
-    if (isAllowedUrl(current, this.options.allowedOrigins) || !this.lastAllowedUrl) return;
-    if (current === 'about:blank') return;
-    await this.page.goto(this.lastAllowedUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    // A failed navigation can commit Chromium's error page a moment later: check twice.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const current = this.page.url();
+      if (
+        !isAllowedUrl(current, this.options.allowedOrigins) &&
+        this.lastAllowedUrl &&
+        current !== 'about:blank'
+      ) {
+        await this.page
+          .goto(this.lastAllowedUrl, { waitUntil: 'domcontentloaded' })
+          .catch(() => {});
+      }
+      if (attempt === 0) await this.page.waitForTimeout(150);
+    }
   }
 
   async collect(): Promise<StepSignals> {
-    const network = this.network;
-    const issues = this.issues;
-    this.network = [];
-    this.issues = [];
+    // Evidence must describe the app, never Chromium's own error page.
+    await this.page.waitForLoadState('domcontentloaded', { timeout: 2_000 }).catch(() => {});
+    await this.returnIfOffsite();
+    // Let body scans and cookie reads for this step finish (bounded, never blocks a run).
+    await Promise.race([Promise.allSettled([...this.pending]), sleep(3000)]);
+    this.checkHangingRequests();
 
     const [a11y, screenshot] = await Promise.all([
-      this.auditAccessibility().catch(() => undefined),
+      this.checkPage().catch((err: unknown) => {
+        // Never silently: a broken oracle looks exactly like a clean app.
+        console.warn(`[oracle] page checks failed: ${(err as Error).message.split('\n')[0]}`);
+        return undefined;
+      }),
       this.page
         .screenshot({ type: 'png' })
         .then((b) => b.toString('base64'))
         .catch(() => undefined),
     ]);
+
+    const network = this.network;
+    const issues = this.issues;
+    this.network = [];
+    this.issues = [];
     return { network, issues, a11yViolations: a11y, screenshotBase64: screenshot };
+  }
+
+  private checkHangingRequests() {
+    const now = Date.now();
+    for (const [request, startedAt] of this.started) {
+      if (now - startedAt < HANG_MS || this.hangReported.has(request)) continue;
+      this.hangReported.add(request);
+      this.report(`hang|${request.method()}|${normalizeRoute(request.url())}`, {
+        kind: 'hanging_request',
+        method: request.method(),
+        message: `${request.method()} ${new URL(request.url()).pathname} has not responded after ${Math.round((now - startedAt) / 1000)} s; the UI may wait forever.`,
+        url: request.url(),
+      });
+    }
+  }
+
+  /**
+   * Page-level oracles: horizontal overflow, Core Web Vitals, and axe-core (WCAG 2.x)
+   * whenever the page content changed. Returns the step's violations for the a11y tab.
+   */
+  private async checkPage(): Promise<string | undefined> {
+    const url = this.page.url();
+    if (!isAllowedUrl(url, this.options.allowedOrigins)) return undefined;
+    const route = normalizeRoute(url);
+
+    const state = await this.page.evaluate(() => {
+      const doc = document.documentElement;
+      const vitals = (window as unknown as { __ghostiqVitals?: { cls: number; lcp: number } })
+        .__ghostiqVitals;
+      // Mobile browsers widen the layout viewport to fit oversized content, so compare
+      // against the device screen, not innerWidth.
+      const width = Math.min(window.innerWidth, window.screen.width || window.innerWidth);
+      // Without a responsive viewport tag, phones lay the page out at desktop width (~980px)
+      // and zoom out: there is no overflow to report on such pages.
+      const responsive = !!document.querySelector('meta[name="viewport"][content*="device-width"]');
+      const mobileLayout = window.screen.width < window.innerWidth;
+      return {
+        html: document.contentType === 'text/html',
+        overflow: mobileLayout && !responsive ? 0 : doc.scrollWidth - width,
+        width,
+        cls: vitals?.cls ?? 0,
+        lcp: vitals?.lcp ?? 0,
+        shape: `${document.querySelectorAll('*').length}:${document.body?.innerText.length ?? 0}`,
+      };
+    });
+    // JSON, images and other non-HTML documents are shown by Chromium's own viewers.
+    if (!state.html) return undefined;
+
+    if (state.overflow > 2) {
+      this.report(`overflow|${route}|${state.width}`, {
+        kind: 'layout_overflow',
+        message: `Content is ${state.overflow}px wider than the ${state.width}px viewport: the page scrolls sideways.`,
+        url,
+        detail: `scrollWidth exceeds viewport by ${state.overflow}px at width ${state.width}`,
+      });
+    }
+    if (state.cls > CLS_POOR) {
+      this.report(`cls|${route}`, {
+        kind: 'web_vital',
+        rule: 'cls',
+        message: `Cumulative Layout Shift is ${state.cls.toFixed(2)} (poor is above ${CLS_POOR}): content jumps while loading.`,
+        url,
+        detail: state.cls.toFixed(3),
+      });
+    }
+    // Under simulated 3G, slow paint is caused by the persona, not the app.
+    if (state.lcp > LCP_POOR_MS && !this.options.network) {
+      this.report(`lcp|${route}`, {
+        kind: 'web_vital',
+        rule: 'lcp',
+        message: `Largest Contentful Paint took ${(state.lcp / 1000).toFixed(1)} s (poor is above ${LCP_POOR_MS / 1000} s).`,
+        url,
+        detail: String(Math.round(state.lcp)),
+      });
+    }
+
+    const stateKey = `${route}|${state.shape}`;
+    if (this.auditedStates.has(stateKey)) return undefined;
+    this.auditedStates.add(stateKey);
+
+    this.auditing = true;
+    let violations: AxeViolation[];
+    try {
+      const results = await new AxeBuilder({ page: this.page }).withTags(AXE_TAGS).analyze();
+      violations = results.violations as AxeViolation[];
+    } finally {
+      this.auditing = false;
+    }
+    // The page navigated while axe ran: the results describe neither page reliably.
+    if (this.page.url() !== url) return undefined;
+    for (const v of violations) {
+      this.report(`a11y|${v.id}|${route}`, {
+        kind: 'a11y',
+        rule: v.id,
+        impact: v.impact ?? 'moderate',
+        message: `${v.help} (${v.nodes.length} element${v.nodes.length === 1 ? '' : 's'})`,
+        url,
+        detail: `${v.nodes[0]?.html.slice(0, 300) ?? ''}\n${v.helpUrl}`,
+      });
+    }
+    if (violations.length === 0) return undefined;
+    return JSON.stringify(
+      violations.map((v) => ({
+        rule: v.id,
+        impact: v.impact ?? 'moderate',
+        description: `${v.help} (${v.nodes.length})`,
+        element: v.nodes[0]?.html.slice(0, 200) ?? '',
+      })),
+    );
   }
 
   async setOffline(offline: boolean): Promise<void> {
@@ -325,52 +603,16 @@ export class PlaywrightDriver implements BrowserDriver {
     await this.context.close().catch(() => {});
     await this.browser.close().catch(() => {});
   }
+}
 
-  /** Three basic checks kept from the prototype; Phase 4 replaces them with axe-core (WCAG). */
-  private async auditAccessibility(): Promise<string | undefined> {
-    const violations = await this.page.evaluate(() => {
-      const list: Array<{ rule: string; impact: string; description: string; element: string }> =
-        [];
-      document.querySelectorAll('img').forEach((img, i) => {
-        if (!img.getAttribute('alt')?.trim()) {
-          list.push({
-            rule: 'Image Alt Text Missing',
-            impact: 'moderate',
-            description: `Image ${i} has no alternative text.`,
-            element: img.outerHTML.slice(0, 100),
-          });
-        }
-      });
-      document.querySelectorAll('input, select, textarea').forEach((node) => {
-        const el = node as HTMLInputElement;
-        if (['submit', 'button', 'hidden'].includes(el.type)) return;
-        const labelled =
-          (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)) ||
-          el.closest('label') ||
-          el.getAttribute('aria-label') ||
-          el.getAttribute('aria-labelledby') ||
-          el.getAttribute('placeholder');
-        if (!labelled) {
-          list.push({
-            rule: 'Form Label Association Missing',
-            impact: 'serious',
-            description: `Field (type="${el.type || 'text'}") has no label.`,
-            element: el.outerHTML.slice(0, 100),
-          });
-        }
-      });
-      document.querySelectorAll('button, [role="button"]').forEach((btn) => {
-        if (!btn.textContent?.trim() && !btn.getAttribute('aria-label')) {
-          list.push({
-            rule: 'Button Name Descriptor Missing',
-            impact: 'critical',
-            description: 'Button has no text or aria-label.',
-            element: btn.outerHTML.slice(0, 100),
-          });
-        }
-      });
-      return list;
-    });
-    return violations.length ? JSON.stringify(violations) : undefined;
+function isMainFrameDocument(request: Request, page: Page): boolean {
+  try {
+    return request.resourceType() === 'document' && request.frame() === page.mainFrame();
+  } catch {
+    return false;
   }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
