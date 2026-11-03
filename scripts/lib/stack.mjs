@@ -5,8 +5,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-export const SERVER = 'http://localhost:3001';
-export const TARGET = 'http://localhost:3000';
+// Ports can be moved so a check can run next to a local dev instance on 3000/3001:
+//   GHOSTIQ_STACK_SERVER_PORT=4001 GHOSTIQ_STACK_TARGET_PORT=4000 node scripts/bench-bugs.mjs
+const SERVER_PORT = Number(process.env.GHOSTIQ_STACK_SERVER_PORT) || 3001;
+const TARGET_PORT = Number(process.env.GHOSTIQ_STACK_TARGET_PORT) || 3000;
+export const SERVER = `http://localhost:${SERVER_PORT}`;
+export const TARGET = `http://localhost:${TARGET_PORT}`;
 
 const children = new Set();
 
@@ -83,11 +87,23 @@ export function prepareDatabase(databaseUrl) {
 }
 
 export function startMockApp(env = {}, options = {}) {
-  return start('mock', 'examples/mock-target-app', ['server.js'], env, options);
+  return start(
+    'mock',
+    'examples/mock-target-app',
+    ['server.js'],
+    { PORT: String(TARGET_PORT), ...env },
+    options,
+  );
 }
 
 export function startServer(env = {}, options = {}) {
-  return start('server', 'apps/server', ['dist/index.js'], env, options);
+  return start(
+    'server',
+    'apps/server',
+    ['dist/index.js'],
+    { PORT: String(SERVER_PORT), ...env },
+    options,
+  );
 }
 
 export function startRunner(projectId, options = {}) {

@@ -142,8 +142,8 @@ gitSha, startedAt, params, runs: [...], summary: {...}, costUsd, tokens }`, plus
 ### 8.2 B1 — seeded bugs (exists)
 
 `scripts/bench-bugs.mjs` already measures recall/precision against
-`examples/mock-target-app/bugs.json`. Remaining: run with `--live` on the default model, record
-results, add `--json` output in the common format.
+`examples/mock-target-app/bugs.json` and writes the common format (done in 8.1). Remaining: run
+with `--live --max-cost-usd …` on the default model and record the results.
 
 ### 8.3 B2 — goal completion on three apps
 
@@ -315,7 +315,8 @@ http://localhost:3001`); dashboard at http://localhost:3001.
 
 ### Phase 8
 
-- [ ] 8.1 Common result format + `--json` + `eval-report.mjs` + cost guard
+- [x] 8.1 Common result format + `--json` + `eval-report.mjs` + cost guard
+      (`scripts/lib/eval.mjs`, tests in `scripts/lib/eval.test.mjs`; B1 migrated)
 - [ ] 8.2 B1 live run recorded
 - [ ] 8.3 `examples/todo-app`, task suite YAML, `bench-goals.mjs`, live run recorded
 - [ ] 8.4 Mutation hooks, `bench-healing.mjs`, live run recorded

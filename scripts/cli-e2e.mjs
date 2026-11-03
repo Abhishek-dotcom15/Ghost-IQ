@@ -12,6 +12,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   SERVER,
+  TARGET,
   assert,
   getJson,
   prepareDatabase,
@@ -24,7 +25,6 @@ import {
 
 const CLI = path.join(root, 'apps/runner/dist/cli.js');
 const OUT = path.join(root, 'evals/cli-e2e');
-const TARGET = 'http://localhost:3000';
 const GOAL = 'Log in to the shop.';
 const demoEnv = { ...process.env, GHOSTIQ_LLM_PROVIDER: 'mock' };
 

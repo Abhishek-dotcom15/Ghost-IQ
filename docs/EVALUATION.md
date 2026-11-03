@@ -3,6 +3,34 @@
 Every number in the README comes from this page. Re-run anything here yourself; the commands
 are listed with each result.
 
+## Running benchmarks
+
+Every benchmark script (`scripts/bench-*.mjs`) shares these options (`scripts/lib/eval.mjs`):
+
+| Option                   | Meaning                                                                                      |
+| ------------------------ | -------------------------------------------------------------------------------------------- |
+| _(none)_                 | Demo mode: the scripted planner, no AI, no cost. Checks the pipeline and the oracles.        |
+| `--live`                 | Use the model configured in `apps/server/.env`.                                              |
+| `--model provider:model` | Use this model, e.g. `gemini:gemini-3.5-flash-lite` or `ollama:llama3.2` (implies `--live`). |
+| `--max-cost-usd N`       | **Required for paid live runs.** Stops the benchmark once the measured LLM spend passes N.   |
+| `--runs N`               | Repeat each persona or task N times.                                                         |
+| `--seed N`               | Base seed for persona inputs (run _i_ uses N + _i_), to reproduce a run exactly.             |
+| `--json`                 | Print the result JSON on stdout; progress goes to stderr.                                    |
+| `--verbose`              | Show the logs of the demo app, server and runner.                                            |
+
+Safety rules built into the cost guard: a live run with a paid provider refuses to start
+without `--max-cost-usd`; fallbacks are switched off in live mode, so a failing model is never
+silently replaced by the scripted planner; a live run stops if the server fell back to demo mode
+(e.g. missing key) or if a model has no known price (set `GHOSTIQ_LLM_PRICE_INPUT` and
+`GHOSTIQ_LLM_PRICE_OUTPUT`). Spend is read from the server's own LLM metering.
+
+Each run writes `evals/results/<bench>-<date>-<provider>-<model>.json` (git-ignored) in one
+format: `{ format, bench, provider, model, mode, gitSha, startedAt, finishedAt, params, runs,
+summary, costUsd, tokens, llmCalls }` plus benchmark-specific detail. `pnpm eval:report` renders
+the newest result per configuration into the marked tables on this page, so published numbers
+are never typed by hand. To run next to a local instance on ports 3000/3001, set
+`GHOSTIQ_STACK_SERVER_PORT` and `GHOSTIQ_STACK_TARGET_PORT` (e.g. 4001 and 4000).
+
 ## B1: seeded bugs (oracle recall and precision)
 
 **Setup.** The demo shop in [`examples/mock-target-app`](../examples/mock-target-app) contains
@@ -15,16 +43,53 @@ detectable by any current oracle and are kept to keep recall honest.
 
 ```bash
 pnpm build
-node scripts/bench-bugs.mjs                         # all 8 personas + visual regression run
+node scripts/bench-bugs.mjs --steps 80              # all 8 personas + visual regression run
 node scripts/bench-bugs.mjs --personas happy-path   # one persona
-node scripts/bench-bugs.mjs --live                  # use your configured LLM instead of demo mode
+node scripts/bench-bugs.mjs --live --max-cost-usd 0.50   # your configured LLM, with a spend limit
+pnpm eval:report                                    # refresh the generated tables below
 ```
 
 The benchmark uses a throwaway database, runs each persona with the goal "explore the whole
 app", marks the first Happy Path run as the visual baseline, restarts the shop with a planted
 visual change, runs Happy Path again, then scores the findings against the manifest.
 
-### Results (2026-11-02, demo mode, 80-step budget per persona)
+### Latest results (generated)
+
+The tables in this section are written by `scripts/eval-report.mjs` from the result files in
+`evals/results/` (the newest result per configuration); do not edit them by hand.
+
+<!-- eval:B1:start -->
+
+| Planner                 | Personas       | Steps | Runs | Recall, all bugs | Recall, detectable | Precision      | LLM cost | Time   | Date       | Commit    |
+| ----------------------- | -------------- | ----- | ---- | ---------------- | ------------------ | -------------- | -------- | ------ | ---------- | --------- |
+| demo (scripted planner) | all 8 + visual | 80    | 1    | 29 / 33 (88%)    | 29 / 31 (94%)      | 37 / 37 (100%) | none     | 13 min | 2026-11-03 | `16c451a` |
+| demo (scripted planner) | happy-path     | 80    | 1    | 20 / 33 (61%)    | 20 / 31 (65%)      | 28 / 28 (100%) | none     | 86 s   | 2026-11-03 | `16c451a` |
+
+<!-- eval:B1:end -->
+
+Found per category:
+
+<!-- eval:B1-categories:start -->
+
+| Category      | #1    | #2    |
+| ------------- | ----- | ----- |
+| accessibility | 5 / 5 | 5 / 5 |
+| server_error  | 2 / 3 | 2 / 3 |
+| performance   | 4 / 4 | 4 / 4 |
+| navigation    | 3 / 3 | 3 / 3 |
+| runtime       | 2 / 2 | 2 / 2 |
+| idempotency   | 3 / 3 | 0 / 3 |
+| validation    | 3 / 3 | 0 / 3 |
+| security      | 5 / 6 | 4 / 6 |
+| auth          | 0 / 2 | 0 / 2 |
+| layout        | 1 / 1 | 0 / 1 |
+| visual        | 1 / 1 | 0 / 1 |
+
+Columns #1-#2 follow the rows of the table above.
+
+<!-- eval:B1-categories:end -->
+
+### First full run (2026-11-02, demo mode, 80-step budget per persona)
 
 | Metric                         | Value                      |
 | ------------------------------ | -------------------------- |
@@ -57,7 +122,9 @@ visual change, runs Happy Path again, then scores the findings against the manif
 **False positives:** the 4 unmatched findings were all "horizontal overflow" on pages without a
 responsive viewport tag, which phones lay out at desktop width. The oracle now skips such pages;
 re-running the mobile persona afterwards gave 27 / 27 findings matching the manifest (100%).
-The full table above is from the run before that fix and is reported as measured.
+The table in this section is from the run before that fix and is reported as measured; the full
+re-run on 2026-11-03 (generated table above) found the same 29 bugs with 37 / 37 findings
+matching the manifest (100%).
 
 **Per persona** (who found what, and what only they found):
 

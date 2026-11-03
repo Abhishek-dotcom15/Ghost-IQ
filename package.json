@@ -19,8 +19,10 @@
     "typecheck": "pnpm build:packages && pnpm -r run typecheck",
     "test": "pnpm build:packages && pnpm -r run test",
     "db:setup": "pnpm --filter @ghostiq/server db:setup",
+    "test:scripts": "node --test scripts/lib/",
     "smoke": "node scripts/smoke.mjs",
-    "verify": "pnpm format:check && pnpm lint && node scripts/check-dockerfile.mjs && node scripts/check-links.mjs && pnpm typecheck && pnpm test && pnpm build",
+    "eval:report": "node scripts/eval-report.mjs",
+    "verify": "pnpm format:check && pnpm lint && node scripts/check-dockerfile.mjs && node scripts/check-links.mjs && pnpm typecheck && pnpm test && pnpm test:scripts && pnpm build",
     "prepare": "husky"
   },
   "devDependencies": {
